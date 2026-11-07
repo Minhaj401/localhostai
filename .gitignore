@@ -1,0 +1,28 @@
+# Rust
+/tui/target/
+/target/
+
+# Flutter / Android
+/app/build/
+/app/.dart_tool/
+/app/android/.gradle/
+/app/android/.kotlin/
+/app/.flutter-plugins
+/app/.flutter-plugins-dependencies
+/app/*.iml
+/app/.idea/
+/app/web/*.dart.js*
+
+# Python (legacy node, to be removed)
+/laptop-node/.venv/
+/laptop-node/__pycache__/
+*.pyc
+
+# Models & runtime
+/models/
+*.gguf
+*.bin
+!app/android/app/src/main/jniLibs/arm64-v8a/libggmlrpc.so
+
+# Build artifacts
+*.apk
