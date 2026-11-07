@@ -150,3 +150,76 @@ cd ~/projects/privatelm-lan/tui && source ~/.cargo/env
 3. `git init` + first commit (repo currently untracked).
 4. Consider a `max_tokens` / reasoning-budget guard in the node so
    thinking models don't burn the whole budget on short prompts.
+
+---
+
+# Productization — phase 1 (embedded node)
+
+## The constraint that changed everything
+
+User: **"everything should be in tui or apk, nothing else."**
+
+So the Python node stopped being a thing anyone runs. The TUI binary now
+**is** the node. Layout became a Cargo workspace:
+
+```
+core/   privateml-core (library — the node)
+tui/    privateml      (binary — UI + starts the node)
+```
+
+No Python, no venv, no run.sh, no systemd unit, no second process, no
+port/config drift between client and server.
+
+## Decided: fully self-contained (option A)
+
+The binary manages its own engine. Ollama is used if it happens to be
+installed (detected), but a brand-new user should never need to install
+anything else: managed llama.cpp + GGUF downloads into `~/.privateml/models`
+is the target. This part is **not built yet** — currently the binary detects
+an existing Ollama/llama-server.
+
+## What exists and is verified
+
+| Piece | State |
+|---|---|
+| `--status` | ✅ prints address, backend, models, pairing |
+| `--headless` | ✅ node only, no UI (SSH/systemd) |
+| `--once "prompt"` | ✅ streamed reply, verified live (Ollama) |
+| interactive TUI | ✅ (needs a real TTY) |
+| `/health` `/v1/models` `/v1/chat/completions` | ✅ SSE passthrough |
+| `/pair` `/pair/verify` + `--require-pairing` | ✅ 401 without token, 200 with |
+| config.toml + pair token in `~/.privateml` | ✅ 0600 token |
+| port auto-selection | ✅ first free ≥ 8765 |
+| UDP discovery | ✅ in-process; sandbox blocks bind but degrades |
+| engine re-probe | ✅ every 15s |
+
+Release binary: **5.4 MB**, `target/release/privateml`.
+
+## Bugs found by running it (do not regress)
+
+1. `fs::read("/dev/urandom")` — an endless device; hangs and eats all RAM.
+   Must `File::open` + `read_exact`.
+2. `/health` returns models as `["a"]`, `/v1/models` as `[{"id":"a"}]`.
+   Two shapes, one parser → silently zero models. Both accepted + tested.
+3. Async startup probe → `--status` and first chat saw `backend: none`.
+   Probe is now synchronous before `start()` returns, then rechecks.
+4. No TTY crashed with a raw `ENXIO`. Now a readable hint naming `--status`.
+5. Unknown flags silently launched the UI. Now rejected with usage.
+6. No-backend chat tried `:8080` and reported a bare 502. Now 503 with
+   "start Ollama, PrivateLM picks it up within 15s".
+7. JSON advert parse ignored `\"` escapes (caught by unit test).
+   Parser now walks with escape handling.
+
+## Still to do (next phases)
+
+1. **Self-contained models** — download/manage llama.cpp + GGUF so no
+   Ollama is required (option A, the remaining half).
+2. **QR pairing** — `GET /pair` exists; the TUI needs to render a QR and
+   the APK needs to scan it (kills manual IP typing for good).
+3. **APK**: drop the Python-era assumptions, point at the embedded node,
+   rebuild release, sign it.
+4. **Delete legacy** `laptop-node/`, `phone-rpc/`, `scripts/setup-distributed.sh`
+   once nothing references them.
+5. **Distributed mode in Rust** — cluster/RPC orchestration currently still
+   lives only in the Python file, so it must be ported to `core/`.
+6. Release tooling: tag, checksums, install one-liner, licence, name check.
