@@ -1,18 +1,21 @@
 [package]
-name = "privatelm-tui"
-version = "0.1.0"
-edition = "2021"
-description = "PrivateLM-LAN terminal client — chat on your laptop's compute"
+name = "privateml"
+description = "PrivateLM — your laptop and phone, one private LLM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "privateml"
+path = "src/main.rs"
 
 [dependencies]
+privateml-core = { path = "../core" }
 ratatui = "0.29"
 crossterm = "0.28"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-futures = "0.3"
-
-[profile.release]
-opt-level = 2
+tokio.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+tracing.workspace = true

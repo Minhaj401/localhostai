@@ -1,12 +1,20 @@
-//! PrivateLM-LAN TUI — terminal chat client for the laptop node.
+//! PrivateLM — one binary. Chatting UI *and* the LAN node itself.
 //!
 //! Usage:
-//!   privatelm-tui [node-url]            interactive TUI (default http://127.0.0.1:8765)
-//!   privatelm-tui --once "prompt"       single-shot: print streamed reply, exit
+//!   privatelm                       start the node + interactive chat
+//!   privatelm --once "prompt"       single-shot: print streamed reply, exit
+//!   privatelm --port 8765           force the listen port
+//!   privatelm --no-lan              loopback only (no phone access)
+//!   privatelm --status              print node info and exit
+//!
+//! The laptop node runs as a task inside this process: embedded HTTP API,
+//! UDP discovery, Ollama/llama.cpp detection. Nothing else to install.
 
 mod api;
 mod app;
 mod ui;
+
+use privateml_core::{config::Config, server, NodeHandle};
 
 use anyhow::{bail, Result};
 use api::{ApiEvent, Node};
@@ -28,17 +36,117 @@ enum UiEvent {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let base = std::env::var("PRIVATELM_NODE")
-        .unwrap_or_else(|_| "http://127.0.0.1:8765".into());
+
+    // ---- flags that do not start a UI
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!(
+            "{} {}",
+            privateml_core::APP_DISPLAY_NAME,
+            env!("CARGO_PKG_VERSION")
+        );
+        return Ok(());
+    }
+
+    // ---- config + node startup (the node IS this process)
+    let mut cfg = Config::load()?;
+    for (i, a) in args.iter().enumerate() {
+        match a.as_str() {
+            "--port" => {
+                if let Some(p) = args.get(i + 1).and_then(|p| p.parse().ok()) {
+                    cfg.port = p;
+                }
+            }
+            "--headless" => {} // handled below
+            "--no-lan" => cfg.lan_enabled = false,
+            "--no-discovery" => cfg.discovery = false,
+            "--require-pairing" => cfg.require_pairing = true,
+            "--name" => {
+                if let Some(n) = args.get(i + 1) {
+                    cfg.node_name = n.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Reject unknown flags early instead of dropping into the TUI, which needs a TTY.
+    const KNOWN: &[&str] = &[
+        "--port", "--no-lan", "--no-discovery", "--require-pairing", "--name",
+        "--status", "--once", "--help", "-h", "--version", "-V", "--headless",
+    ];
+    for a in &args {
+        if a.starts_with('-') && !KNOWN.contains(&a.as_str()) {
+            bail!("unknown option {a}\n\nRun `privateml --help` for usage.");
+        }
+    }
+
+    let node_handle = server::start(cfg.clone()).await?;
+    let base = format!("http://127.0.0.1:{}", node_handle.port());
+
+    if args.iter().any(|a| a == "--status") {
+        let n = Node::with_token(&base, Some(node_handle.pair_token().into()));
+        let h = n.health().await?;
+        println!("{} {}", privateml_core::APP_DISPLAY_NAME, h.version);
+        println!("node    : {}", h.name);
+        println!("listen  : {}", base);
+        println!("backend : {}", if h.backend.is_empty() { "none" } else { &h.backend });
+        println!("pairing : {}", if h.pairing { "required" } else { "off" });
+        println!("models  : {}", if h.models.is_empty() { "(none)".into() } else { h.models.join(", ") });
+        node_handle.shutdown();
+        return Ok(());
+    }
 
     if let Some(pos) = args.iter().position(|a| a == "--once") {
         let prompt = args.get(pos + 1).cloned();
-        let url = args.iter().find(|a| a.starts_with("http")).cloned().unwrap_or(base);
-        return once(&url, prompt).await;
+        let r = once(&base, prompt).await;
+        node_handle.shutdown();
+        return r;
     }
 
-    let url = args.first().cloned().unwrap_or(base);
-    run_tui(url).await
+    // Headless: node only, no UI. Useful for SSH, systemd, and testing.
+    if args.iter().any(|a| a == "--headless") {
+        let h = node_handle.clone_ref();
+        println!("{} {} — node listening on {base}", privateml_core::APP_DISPLAY_NAME, env!("CARGO_PKG_VERSION"));
+        println!("pair token: {}", h.pair_token());
+        tokio::signal::ctrl_c().await.ok();
+        node_handle.shutdown();
+        return Ok(());
+    }
+
+    // Interactive: hand the node handle to the UI so the status bar can show it.
+    let r = run_tui(base, Some(node_handle.clone_ref())).await;
+    node_handle.shutdown();
+    r
+}
+
+fn print_help() {
+    println!(
+        "{name} {ver} — private LLM chat across your laptop and phone\n\
+\n\
+USAGE:\n  privatelm [OPTIONS]\n\
+\n\
+OPTIONS:\n\
+  --once <PROMPT>     print one streamed reply and exit\n\
+  --status            show node address, backend and models, then exit\n\
+  --port <N>          listen port (default 8765, next free if taken)\n\
+  --name <NAME>       name shown on the phone\n\
+  --no-lan            loopback only; the phone cannot connect\n\
+  --no-discovery      do not answer UDP discovery broadcasts\n\
+  --require-pairing   demand the pair token on every request\n\
+  --headless          run the node with no UI (SSH, systemd, testing)\n\
+  -h, --help          show this help\n\
+  -V, --version       show version\n\
+\n\
+FILES:\n  ~/.privateml/config.toml   settings\n\
+  ~/.privateml/pair_token    shared secret for the phone\n\
+  ~/.privateml/models/       downloaded GGUF models\n",
+        name = privateml_core::APP_DISPLAY_NAME,
+        ver = env!("CARGO_PKG_VERSION")
+    );
 }
 
 /// Single-shot mode — testable without a TTY.
@@ -77,13 +185,21 @@ async fn once(url: &str, prompt: Option<String>) -> Result<()> {
     Ok(())
 }
 
-async fn run_tui(url: String) -> Result<()> {
+async fn run_tui(url: String, handle: Option<NodeHandle>) -> Result<()> {
+    use std::io::IsTerminal;
+    if !io::stdout().is_terminal() {
+        bail!(
+            "PrivateLM's chat UI needs a terminal.\n\
+             Try: privateml --status   (node info)\n\
+             or:  privateml --once \"hello\"   (one reply)"
+        );
+    }
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let res = event_loop(&mut terminal, url).await;
+    let res = event_loop(&mut terminal, url, handle).await;
 
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
@@ -93,8 +209,12 @@ async fn run_tui(url: String) -> Result<()> {
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     url: String,
+    handle: Option<privateml_core::NodeHandle>,
 ) -> Result<()> {
-    let node = Node::new(&url);
+    let node = match &handle {
+        Some(h) => Node::with_token(&url, Some(h.pair_token().to_string())),
+        None => Node::new(&url),
+    };
     let mut app = App::new(url.clone(), String::new());
 
     // Health + model list on startup.
