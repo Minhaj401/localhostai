@@ -1,33 +1,31 @@
-feat(core): hardware probe, split planner, cluster manager, QR pairing
+feat(tui): model picker with pool, device panel, QR pairing, --connect
 
-The node can now divide a model across devices and actually run it.
+The TUI now shows what the cluster actually is, and can't overstate it.
 
-New modules:
-- hardware.rs  probes RAM/cores/threads and derives a memory budget, so a
-               device never promises memory it cannot spare. Phone numbers
-               arrive over POST /peers instead of being assumed.
-- plan.rs      split planner: distributes layers by budget share, charges KV
-               cache per layer, reports shortfall and a plain-English summary.
-- cluster.rs   runs the real thing: spawns ggml-rpc-server, then llama-server
-               with --rpc <self>,<peers>, waits for /health, supervises exits.
-               rpc_reachable() gates whether a peer counts at all.
-- qr.rs        pairing payload + terminal rendering. Encoder delegates to the
-               qrcode crate: a hand-written one produced grids that looked
-               right and did not scan.
+Overlays:
+- models (Up): pool size in GB above the list; D runs the model distributed
+- devices (d): per-device budget, thread count, and whether it is genuinely
+  usable. Unreachable peers are labelled NOT counted rather than silently
+  inflating the pool.
+- pairing (p): renders the scannable QR in the terminal plus the URI.
 
-New endpoints: POST/GET /peers, GET/POST /models, GET /cluster,
-POST /cluster/plan, POST /cluster/start, POST /cluster/stop.
-/pair now returns a privateml:// URI plus this device's hardware.
+New flag: --connect <URL> attaches the UI to a node that is already running
+(one node owns the port; a second terminal or another machine can still drive
+it). Fails fast with an actionable message instead of showing an empty screen.
 
-Honesty fix: a peer that reports hardware but has no reachable RPC worker is
-excluded from plans and from the pool total, with the reason surfaced. An
-earlier demo had counted a fabricated phone and it silently inflated memory.
+Honesty fixes found while testing the panels:
+- peers were marked "stopped reporting" purely on heartbeat age, which showed
+  a live worker as dead. Reachability is now probed and reported separately
+  from staleness, and /peers exposes reachable + usable per device.
+- the pool total counts only self + reachable peers. A device that reports RAM
+  while nothing answers its RPC socket is excluded, with the reason shown.
 
-verified end-to-end on real binaries:
-- probe: 7720 MB RAM -> 6320 MB budget, 3 threads
-- real rpc worker on :50111 counted, fake peer on :50052 excluded
-- plan: "Fits across 2 devices: local-rpc 19/36L + anon 17/36L"
-- start -> state=running -> chat returned 'SPLIT WORKS' through the split
-- QR payload decodes exactly with OpenCV (version 4, 37x37 modules)
+verified in a real pty (rendered screen, not just logs):
+- pairing overlay draws a 41x41 QR that OpenCV decodes back to the exact
+  privateml:// URI including the real LAN IP 192.168.100.144
+- devices overlay: "pool 12.8 GB usable across 3 device(s)", real worker
+  marked reachable, unreachable peer marked NOT counted
+- --connect against a live node prints the node identity; a dead address
+  exits with a clear hint
 
 tests: 27 passing

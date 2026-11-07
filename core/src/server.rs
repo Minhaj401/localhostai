@@ -581,13 +581,27 @@ async fn dispatch(
             "cores": self_hw.cores, "threads": self_hw.threads,
             "arch": self_hw.arch, "rpc": null, "self": true,
         }))
-        .chain(peers.iter().map(|p| json!({
-            "id": p.hw.id, "name": p.hw.name, "kind": p.hw.kind,
-            "ram_mb": p.hw.ram_mb, "budget_mb": p.hw.budget_mb,
-            "cores": p.hw.cores, "threads": p.hw.threads,
-            "arch": p.hw.arch, "rpc": p.rpc, "self": false,
-            "stale": p.last_seen.elapsed() >= std::time::Duration::from_secs(30),
-        })))
+        .chain(
+            futures::future::join_all(peers.iter().map(|p| async move {
+                // Reachability is the honest signal: a stale heartbeat with a
+                // live worker can still host layers, and vice versa.
+                let reachable = match &p.rpc {
+                    Some(r) if !r.is_empty() => crate::cluster::rpc_reachable(r).await,
+                    _ => false,
+                };
+                json!({
+                    "id": p.hw.id, "name": p.hw.name, "kind": p.hw.kind,
+                    "ram_mb": p.hw.ram_mb, "budget_mb": p.hw.budget_mb,
+                    "cores": p.hw.cores, "threads": p.hw.threads,
+                    "arch": p.hw.arch, "rpc": p.rpc, "self": false,
+                    "stale": p.last_seen.elapsed() >= std::time::Duration::from_secs(30),
+                    "reachable": reachable,
+                    // Usable = we can put layers there right now.
+                    "usable": reachable,
+                })
+            }))
+            .await,
+        )
         .collect();
         let b = json!({ "devices": list });
         return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;

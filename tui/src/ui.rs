@@ -35,7 +35,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             format!("{} · {}", app.backend_label, model),
             Style::default().fg(Color::Cyan),
         ),
-        Span::raw("  ↑↓ model · Enter send · Esc quit"),
+        Span::styled(
+            format!(" {} ", app.cluster_label),
+            if app.cluster_label.starts_with("distributed") {
+                Style::default().fg(Color::Black).bg(Color::Magenta)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ),
+        Span::raw("  ↑ model · d devices · p pair · Esc quit"),
     ];
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -128,31 +136,149 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn model_picker(f: &mut Frame, app: &App, area: Rect) {
-    let items: Vec<ListItem> = app
-        .models
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let marker = if Some(i) == app.selected_model {
-                "▸ "
-            } else {
-                "  "
-            };
-            ListItem::new(format!("{marker}{m}"))
-        })
-        .collect();
-    let popup = List::new(items)
+    let mut items: Vec<ListItem> = Vec::new();
+    items.push(ListItem::new(Line::from(Span::styled(
+        format!(
+            "pool: {} device(s), {:.1} GB usable",
+            app.devices.iter().filter(|d| d.is_self || (!d.stale && d.reachable)).count(),
+            app.pool_mb() as f64 / 1024.0
+        ),
+        Style::default().fg(Color::DarkGray),
+    ))));
+    for (i, m) in app.models.iter().enumerate() {
+        let marker = if Some(i) == app.selected_model { "▸ " } else { "  " };
+        let style = if Some(i) == app.selected_model {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        items.push(ListItem::new(Line::from(Span::styled(format!("{marker}{m}"), style))));
+    }
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  (Enter: use · D: run distributed · Esc: cancel)",
+        Style::default().fg(Color::DarkGray),
+    ))));
+
+    let popup = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" models ")
+            .style(Style::default().bg(Color::Black)),
+    );
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(popup, area);
+}
+
+/// Device pool: what each machine can contribute, and whether it really can.
+pub fn devices_panel(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(
+            "pool {:>6.1} GB usable across {} device(s)",
+            app.pool_mb() as f64 / 1024.0,
+            app.devices.len()
+        ),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    for d in &app.devices {
+        // Layers go where a worker answers. A stale heartbeat is a warning,
+        // not a disqualification — the worker may still be listening.
+        let usable = d.is_self || d.reachable;
+        let (icon, colour) = if usable {
+            ("✔", Color::Green)
+        } else if d.stale {
+            ("✖", Color::Red)
+        } else {
+            ("⚠", Color::Yellow)
+        };
+        let why = if d.is_self {
+            "this machine".to_string()
+        } else if d.reachable && d.stale {
+            "worker reachable, heartbeat stale".to_string()
+        } else if d.reachable {
+            "worker reachable".to_string()
+        } else if d.stale {
+            "silent and no worker answered".to_string()
+        } else {
+            "reports RAM but no worker — NOT counted".to_string()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {icon} "), Style::default().fg(colour)),
+            Span::styled(
+                format!("{:<14}", truncate(&d.name, 14)),
+                Style::default().fg(if usable { Color::White } else { Color::DarkGray }),
+            ),
+            Span::styled(format!("{:<8}", d.kind), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:>6.1} GB  ", d.budget_mb as f64 / 1024.0),
+                Style::default().fg(if usable { Color::Cyan } else { Color::DarkGray }),
+            ),
+            Span::styled(format!("{}t  ", d.threads), Style::default().fg(Color::DarkGray)),
+            Span::styled(why, Style::default().fg(colour)),
+        ]));
+    }
+
+    if app.devices.len() <= 1 {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " No phone has joined yet. On the Android app, scan the pairing code (p).",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let popup = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" compute pool · Esc to close ")
+            .style(Style::default().bg(Color::Black)),
+    );
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(popup, area);
+}
+
+/// Pairing: the QR a phone scans to join.
+pub fn pairing_panel(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    if app.qr_lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " generating pairing code…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for l in &app.qr_lines {
+            lines.push(Line::from(Span::styled(l.clone(), Style::default().fg(Color::White))));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(" {} ", if app.pair_uri.is_empty() { "—" } else { &app.pair_uri }),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        " Scan in the PrivateLM app → Add node → Scan QR.",
+        Style::default().fg(Color::Cyan),
+    )));
+
+    let popup = Paragraph::new(lines)
+        .alignment(Alignment::Center)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" select model (Enter/Esc) ")
+                .title(" pair this phone · Esc to close ")
                 .style(Style::default().bg(Color::Black)),
-        )
-        .highlight_style(Style::default().bg(Color::DarkGray));
-    let mut state = ListState::default();
-    state.select(Some(app.selected_model.unwrap_or(0)));
+        );
     f.render_widget(ratatui::widgets::Clear, area);
-    f.render_stateful_widget(popup, area, &mut state);
+    f.render_widget(popup, area);
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n.saturating_sub(1)).collect::<String>() + "…"
+    }
 }
 
 pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {

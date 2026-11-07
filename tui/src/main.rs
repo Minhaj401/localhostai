@@ -18,7 +18,7 @@ use privateml_core::{config::Config, server, NodeHandle};
 
 use anyhow::{bail, Result};
 use api::{ApiEvent, Node};
-use app::{App, Msg};
+use app::{App, DeviceRow, Msg, Overlay};
 use crossterm::{
     event::{self, Event as CEvent, KeyCode, KeyEventKind},
     execute,
@@ -76,12 +76,44 @@ async fn main() -> Result<()> {
     // Reject unknown flags early instead of dropping into the TUI, which needs a TTY.
     const KNOWN: &[&str] = &[
         "--port", "--no-lan", "--no-discovery", "--require-pairing", "--name",
-        "--status", "--once", "--help", "-h", "--version", "-V", "--headless",
+        "--status", "--once", "--help", "-h", "--version", "-V", "--headless", "--connect",
     ];
     for a in &args {
         if a.starts_with('-') && !KNOWN.contains(&a.as_str()) {
             bail!("unknown option {a}\n\nRun `privateml --help` for usage.");
         }
+    }
+
+    // Attach to a node that is already running instead of starting another.
+    // Needed because one node can only own the port, and a UI on another
+    // machine (or a second terminal) should still be able to drive it.
+    if let Some(pos) = args.iter().position(|a| a == "--connect") {
+        let url = match args.get(pos + 1) {
+            Some(u) if u.starts_with("http") => u.clone(),
+            _ => bail!("--connect needs a URL, e.g. --connect http://192.168.1.20:8765"),
+        };
+        let token = std::env::var("PRIVATELM_TOKEN").ok();
+        let node = match token {
+            Some(t) => Node::with_token(&url, Some(t)),
+            None => Node::new(&url),
+        };
+        // Fail fast with an actionable message rather than an empty screen.
+        match node.health().await {
+            Ok(h) => {
+                println!(
+                    "Connected to {} ({}) · {} · {} model(s)",
+                    h.name,
+                    url,
+                    h.backend,
+                    h.models.len()
+                );
+            }
+            Err(e) => bail!(
+                "cannot reach a PrivateLM node at {url}: {e}\n\
+                 Start one with `privateml` on that machine, or check the address/port."
+            ),
+        }
+        return run_tui(url, None).await;
     }
 
     let node_handle = server::start(cfg.clone()).await?;
@@ -138,6 +170,7 @@ OPTIONS:\n\
   --no-discovery      do not answer UDP discovery broadcasts\n\
   --require-pairing   demand the pair token on every request\n\
   --headless          run the node with no UI (SSH, systemd, testing)\n\
+  --connect <URL>     attach the UI to a node that is already running\n\
   -h, --help          show this help\n\
   -V, --version       show version\n\
 \n\
@@ -225,6 +258,8 @@ async fn event_loop(
         app.model = app.models.first().cloned();
         app.selected_model = if app.models.is_empty() { None } else { Some(0) };
     }
+    refresh_devices(&node, &mut app).await;
+    refresh_cluster(&node, &mut app).await;
 
     // Keyboard events come from a blocking thread; API events from tasks.
     let (key_tx, mut rx): (UnboundedSender<UiEvent>, UnboundedReceiver<UiEvent>) =
@@ -242,16 +277,50 @@ async fn event_loop(
         }
     });
 
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(4));
+    ticker.tick().await;
+
     loop {
         terminal.draw(|f| {
             ui::draw(f, &mut app);
-            if app.picker_open {
-                let area = ui::centered_rect(50, (app.models.len() as u16 + 2).min(12), f.area());
-                ui::model_picker(f, &app, area);
+            match app.overlay {
+                Overlay::ModelPicker => {
+                    let h = (app.models.len() as u16 + 4).min(14);
+                    let area = ui::centered_rect(60, h, f.area());
+                    ui::model_picker(f, &app, area);
+                }
+                Overlay::Devices => {
+                    let h = (app.devices.len() as u16 + 8).min(18);
+                    let area = ui::centered_rect(86, h, f.area());
+                    ui::devices_panel(f, &app, area);
+                }
+                Overlay::Pairing => {
+                    let h = (app.qr_lines.len() as u16 + 8).min(f.area().height);
+                    let w = app
+                        .qr_lines
+                        .first()
+                        .map(|l| l.chars().count() as u16 + 4)
+                        .unwrap_or(46)
+                        .max(46);
+                    let area = ui::centered_rect(w + 4, h, f.area());
+                    ui::pairing_panel(f, &app, area);
+                }
+                Overlay::None => {}
             }
         })?;
 
-        let Some(ev) = rx.recv().await else { break };
+        let ev = tokio::select! {
+            got = rx.recv() => match got {
+                Some(e) => e,
+                None => break,
+            },
+            _ = ticker.tick() => {
+                // Periodic refresh so the pool and cluster state stay truthful.
+                refresh_devices(&node, &mut app).await;
+                refresh_cluster(&node, &mut app).await;
+                continue;
+            }
+        };
         match ev {
             UiEvent::Api(ApiEvent::Chunk(s)) => {
                 app.streaming.push_str(&s);
@@ -277,40 +346,57 @@ async fn event_loop(
                 app.busy = false;
             }
             UiEvent::Key(key) => match key.code {
-                KeyCode::Esc if app.picker_open => app.picker_open = false,
+                // ---- overlays close first
+                KeyCode::Esc if app.overlay != Overlay::None => app.overlay = Overlay::None,
                 KeyCode::Esc => break,
-                KeyCode::Up if app.picker_open => {
+                KeyCode::Char('d') if app.overlay == Overlay::None && !app.busy => {
+                    refresh_devices(&node, &mut app).await;
+                    app.overlay = Overlay::Devices;
+                }
+                KeyCode::Char('p') if app.overlay == Overlay::None && !app.busy => {
+                    load_qr(&node, &mut app).await;
+                    app.overlay = Overlay::Pairing;
+                }
+                // ---- model picker movement
+                KeyCode::Up if app.overlay == Overlay::ModelPicker => {
                     if let Some(i) = app.selected_model {
                         app.selected_model = Some(i.saturating_sub(1));
                     }
                 }
-                KeyCode::Down if app.picker_open => {
+                KeyCode::Down if app.overlay == Overlay::ModelPicker => {
                     if let Some(i) = app.selected_model {
                         if i + 1 < app.models.len() {
                             app.selected_model = Some(i + 1);
                         }
                     }
                 }
-                KeyCode::Enter if app.picker_open => {
+                KeyCode::Enter if app.overlay == Overlay::ModelPicker => {
                     app.model = app.selected_model.and_then(|i| app.models.get(i).cloned());
-                    app.picker_open = false;
+                    app.overlay = Overlay::None;
                 }
-                KeyCode::Up if !app.busy => {
+                KeyCode::Char('D') if app.overlay == Overlay::ModelPicker => {
+                    let chosen = app.selected_model.and_then(|i| app.models.get(i).cloned());
+                    app.overlay = Overlay::None;
+                    if let Some(m) = chosen {
+                        start_distributed(&node, &mut app, &m).await;
+                    }
+                }
+                KeyCode::Up if app.overlay == Overlay::None && !app.busy => {
                     app.selected_model = Some(match app.selected_model {
                         Some(i) => i.saturating_sub(1),
                         None => 0,
                     });
-                    app.picker_open = true;
+                    app.overlay = Overlay::ModelPicker;
                 }
                 KeyCode::Char('c')
                     if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
                 {
                     break
                 }
-                KeyCode::Backspace if !app.picker_open => {
+                KeyCode::Backspace if app.overlay == Overlay::None => {
                     app.input.pop();
                 }
-                KeyCode::Enter if !app.picker_open && !app.busy && !app.input.is_empty() => {
+                KeyCode::Enter if app.overlay == Overlay::None && !app.busy && !app.input.is_empty() => {
                     let prompt = std::mem::take(&mut app.input);
                     app.messages.push(Msg {
                         role: "user".into(),
@@ -342,12 +428,104 @@ async fn event_loop(
                     // splice the API receiver into the main receiver
                     tokio::spawn(forward(rx, key_tx.clone()));
                 }
-                KeyCode::Char(c) if !app.picker_open => app.input.push(c),
+                KeyCode::Char(c) if app.overlay == Overlay::None => app.input.push(c),
                 _ => {}
             },
         }
     }
     Ok(())
+}
+
+/// Pull the device pool from the node. Only reachable devices are counted,
+/// so the number shown here is memory we can genuinely use.
+async fn refresh_devices(node: &Node, app: &mut App) {
+    if let Ok(v) = node.get_json("/peers").await {
+        if let Some(arr) = v["devices"].as_array() {
+            app.devices = arr.iter().map(DeviceRow::from_json).collect();
+        }
+    }
+}
+
+/// Reflect whether we are serving locally or from a split model.
+async fn refresh_cluster(node: &Node, app: &mut App) {
+    let Ok(v) = node.get_json("/cluster").await else { return };
+    let state = v["state"].as_str().unwrap_or("stopped");
+    app.cluster_label = match state {
+        "running" => format!(
+            "distributed {}/{}L",
+            v["layers_on_self"].as_u64().unwrap_or(0),
+            v["total_layers"].as_u64().unwrap_or(0)
+        ),
+        "starting" => "starting…".into(),
+        "failed" => "cluster failed".into(),
+        _ => "local".into(),
+    };
+    if let Some(err) = v["error"].as_str() {
+        app.notice = Some(err.to_string());
+    }
+}
+
+/// Build the pairing QR from the node's /pair payload.
+async fn load_qr(node: &Node, app: &mut App) {
+    let Ok(v) = node.get_json("/pair").await else {
+        app.notice = Some("could not read pairing info".into());
+        return;
+    };
+    let uri = v["uri"].as_str().unwrap_or("").to_string();
+    if uri.is_empty() {
+        app.notice = Some("node did not return a pairing URI".into());
+        return;
+    }
+    match privateml_core::qr::encode(&uri) {
+        Some(grid) => {
+            app.qr_lines = privateml_core::qr::render_terminal(&grid, 2);
+            app.pair_uri = uri;
+        }
+        None => app.notice = Some("pairing payload too large to encode".into()),
+    }
+}
+
+/// Plan a split for `model` across the pool, then ask the node to serve it.
+async fn start_distributed(node: &Node, app: &mut App, model: &str) {
+    // Register the model if the node does not know it yet (Ollama names may
+    // not have a GGUF path, which distributed mode requires).
+    let plan_req = serde_json::json!({ "model": model, "ctx": 4096 });
+    match node.post_json("/cluster/plan", &plan_req).await {
+        Ok(v) => {
+            let summary = v["plan"]["summary"].as_str().unwrap_or("").to_string();
+            let fits = !v["plan"]["over_budget"].as_bool().unwrap_or(true);
+            if !fits {
+                app.notice = Some(summary);
+                return;
+            }
+            app.notice = Some(format!("starting: {summary}"));
+            match node
+                .post_json("/cluster/start", &serde_json::json!({ "model": model, "ctx": 4096 }))
+                .await
+            {
+                Ok(r) => {
+                    if r["ok"].as_bool().unwrap_or(false) {
+                        app.notice = Some(format!("distributed: {summary}"));
+                        refresh_cluster(node, app).await;
+                    } else {
+                        let e = r["error"]
+                            .as_str()
+                            .or_else(|| r["status"]["error"].as_str())
+                            .unwrap_or("cluster failed");
+                        app.notice = Some(e.to_string());
+                    }
+                }
+                Err(e) => app.notice = Some(format!("start failed: {e}")),
+            }
+        }
+        Err(e) => {
+            // 404 means the model has no GGUF path registered — say so plainly.
+            app.notice = Some(format!(
+                "cannot plan '{model}': {e}. Distributed mode needs a GGUF file \
+                 (Ollama-only models must be exported first)."
+            ));
+        }
+    }
 }
 
 async fn forward(mut from: UnboundedReceiver<ApiEvent>, to: UnboundedSender<UiEvent>) {

@@ -209,3 +209,36 @@ mod tests {
         assert_eq!(friendly(500, "boom"), "HTTP 500: boom");
     }
 }
+
+impl Node {
+    /// GET a JSON document from the node.
+    pub async fn get_json(&self, path: &str) -> Result<Value> {
+        let r = self
+            .auth(self.http.get(format!("{}{}", self.base, path)))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(r.json::<Value>().await?)
+    }
+
+    /// POST JSON and return the response document (errors carry the body).
+    pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value> {
+        let r = self
+            .auth(self.http.post(format!("{}{}", self.base, path)))
+            .json(body)
+            .send()
+            .await?;
+        let status = r.status();
+        let text = r.text().await.unwrap_or_default();
+        let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
+        if !status.is_success() {
+            let msg = v["error"]["message"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .unwrap_or(&text)
+                .to_string();
+            bail!("{}", friendly(status.as_u16(), &msg));
+        }
+        Ok(v)
+    }
+}
