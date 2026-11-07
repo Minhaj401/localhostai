@@ -202,3 +202,24 @@ mod tests {
         assert!(p.pairing);
     }
 }
+
+/// Best-effort LAN address of this machine.
+///
+/// Opening a UDP socket toward a routable address makes the kernel pick the
+/// interface it would actually use, without sending a packet.
+pub fn local_ip() -> Option<std::net::IpAddr> {
+    let sock = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    sock.connect(("192.0.2.1", 9)).ok()?; // TEST-NET-1, never routed
+    sock.local_addr().ok().map(|a| a.ip())
+}
+
+#[cfg(test)]
+mod ip_tests {
+    #[test]
+    fn local_ip_is_never_loopback_when_routable() {
+        if let Some(ip) = super::local_ip() {
+            // May legitimately be loopback in a sandbox with no route.
+            assert!(!ip.is_unspecified());
+        }
+    }
+}

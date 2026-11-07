@@ -12,12 +12,19 @@
 //!   models     — GGUF catalog + download with progress
 
 pub mod api;
+pub mod cluster;
 pub mod config;
 pub mod discovery;
+pub mod hardware;
+pub mod plan;
+pub mod qr;
 pub mod server;
 
 pub use api::{ApiEvent, Node};
+pub use cluster::{Cluster, ClusterState, ClusterStatus, Toolchain};
 pub use config::Config;
+pub use hardware::Hardware;
+pub use plan::{ModelInfo, SplitPlan};
 pub use server::{NodeHandle, NodeRuntime, ServerStatus};
 
 /// Product identity, single source of truth.

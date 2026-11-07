@@ -21,8 +21,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, watch};
 
+use crate::cluster::{Cluster, ClusterStatus};
 use crate::config::Config;
 use crate::discovery::Advert;
+use crate::hardware::Hardware;
+use crate::plan::{self, ModelInfo, SplitPlan};
 
 /// Live view of the node for the TUI status bar.
 #[derive(Debug, Clone, Default)]
@@ -47,6 +50,14 @@ pub struct NodeHandle {
     inner: Arc<Inner>,
 }
 
+/// A remote device that told us what it can contribute.
+#[derive(Debug, Clone)]
+struct Peer {
+    hw: Hardware,
+    rpc: Option<String>,
+    last_seen: std::time::Instant,
+}
+
 struct Inner {
     cfg: Config,
     pair_token: String,
@@ -55,6 +66,11 @@ struct Inner {
     advert: Option<watch::Sender<Advert>>,
     shutdown: broadcast::Sender<()>,
     port: u16,
+    hardware: Hardware,
+    cluster: Cluster,
+    peers: tokio::sync::Mutex<Vec<Peer>>,
+    // Model inventory (GGUF files we can place across the cluster).
+    models: tokio::sync::Mutex<Vec<ModelInfo>>,
 }
 
 impl NodeHandle {
@@ -68,6 +84,94 @@ impl NodeHandle {
 
     pub fn pair_token(&self) -> &str {
         &self.inner.pair_token
+    }
+
+    pub fn hardware(&self) -> Hardware {
+        self.inner.hardware.clone()
+    }
+
+    pub fn cluster(&self) -> Cluster {
+        self.inner.cluster.clone()
+    }
+
+    /// LAN address to advertise (best-effort; loopback when unknown).
+    pub fn lan_host(&self) -> String {
+        crate::discovery::local_ip()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "127.0.0.1".into())
+    }
+
+    /// The payload the QR code carries.
+    pub fn pair_payload(&self) -> crate::qr::PairPayload {
+        crate::qr::PairPayload::new(
+            &self.lan_host(),
+            self.inner.port,
+            &self.inner.pair_token,
+            &self.inner.cfg.node_name,
+        )
+    }
+
+    /// Register a GGUF model so it can be planned/served.
+    pub async fn add_model(&self, m: ModelInfo) {
+        let mut g = self.inner.models.lock().await;
+        g.retain(|x| x.path != m.path);
+        g.push(m);
+    }
+
+    pub async fn models_available(&self) -> Vec<ModelInfo> {
+        self.inner.models.lock().await.clone()
+    }
+
+    /// Plan a split for a model using this machine plus reporting peers.
+    pub async fn plan_model(&self, name_or_path: &str, ctx: u32) -> Option<SplitPlan> {
+        let models = self.inner.models.lock().await.clone();
+        let m = models.iter().find(|m| m.name == name_or_path || m.path == name_or_path)?.clone();
+        Some(self.plan_with(&m, ctx).await)
+    }
+
+    async fn plan_with(&self, m: &ModelInfo, ctx: u32) -> SplitPlan {
+        self.plan_with_detail(m, ctx).await.0
+    }
+
+    /// Plan, also returning the devices that were excluded and why — so the UI
+    /// can say "phone reported but has no reachable worker" instead of quietly
+    /// promising memory that does not exist.
+    async fn plan_with_detail(
+        &self,
+        m: &ModelInfo,
+        ctx: u32,
+    ) -> (SplitPlan, Vec<(String, String)>) {
+        let mut devices: Vec<(Hardware, Option<String>)> =
+            vec![(self.inner.hardware.clone(), None)];
+        let mut excluded = Vec::new();
+
+        let peers = self.inner.peers.lock().await;
+        for p in peers.iter() {
+            if p.last_seen.elapsed() >= std::time::Duration::from_secs(30) {
+                excluded.push((p.hw.name.clone(), "stopped reporting (>30s)".into()));
+                continue;
+            }
+            match &p.rpc {
+                // A device can only hold layers if we can actually reach its
+                // worker. Counting it otherwise would invent memory.
+                Some(rpc) if !rpc.is_empty() => {
+                    if crate::cluster::rpc_reachable(rpc).await {
+                        devices.push((p.hw.clone(), Some(rpc.clone())));
+                    } else {
+                        excluded.push((
+                            p.hw.name.clone(),
+                            format!("reported {rpc} but no RPC worker answered"),
+                        ));
+                    }
+                }
+                _ => excluded.push((
+                    p.hw.name.clone(),
+                    "reported hardware but no RPC worker address".into(),
+                )),
+            }
+        }
+        drop(peers);
+        (plan::plan(m, &devices, ctx), excluded)
     }
 
     /// Update the advert when backend/model list changes.
@@ -136,8 +240,8 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         (None, ())
     };
 
+    let hardware = Hardware::probe_self(&cfg.node_name);
     let inner = Arc::new(Inner {
-        cfg,
         pair_token,
         status_tx,
         http: reqwest::Client::builder()
@@ -146,6 +250,11 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         advert: advert_tx,
         shutdown: shutdown_tx.clone(),
         port,
+        hardware,
+        cluster: Cluster::new(),
+        peers: tokio::sync::Mutex::new(Vec::new()),
+        models: tokio::sync::Mutex::new(Vec::new()),
+        cfg,
     });
 
     // Accept loop
@@ -375,13 +484,25 @@ async fn dispatch(
 
     // Pairing endpoints.
     if path == "/pair" && method == "GET" {
-        let ip = crate::config::home();
+        let handle = NodeHandle { inner: inner.clone() };
+        let payload = handle.pair_payload();
+        let hw = inner.hardware.clone();
         let body = json!({
             "name": inner.cfg.node_name,
+            "host": payload.host,
             "port": inner.port,
-            // The phone gets the token by scanning; never log this.
             "token": inner.pair_token,
-            "home": ip.display().to_string(),
+            // Everything a phone needs, in one string it can scan.
+            "uri": payload.uri(),
+            "hardware": {
+                "ram_mb": hw.ram_mb,
+                "budget_mb": hw.budget_mb,
+                "cores": hw.cores,
+                "threads": hw.threads,
+                "kind": hw.kind,
+                "arch": hw.arch,
+            },
+            "cluster_ready": handle.cluster().toolchain().is_some(),
         });
         return respond_cors(&mut stream, 200, "application/json", body.to_string().as_bytes()).await;
     }
@@ -389,6 +510,221 @@ async fn dispatch(
         let ok = authorized(&inner, &headers);
         let body = json!({ "ok": ok });
         return respond_cors(&mut stream, if ok { 200 } else { 401 }, "application/json", body.to_string().as_bytes()).await;
+    }
+
+    // ---- device / cluster API -------------------------------------------------
+    // Phones report their hardware here so the planner can use real numbers.
+    if path == "/peers" && method == "POST" {
+        let body: Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                let b = json!({ "error": format!("bad json: {e}") });
+                return respond_cors(&mut stream, 400, "application/json", b.to_string().as_bytes()).await;
+            }
+        };
+        let hw = Hardware::from_raw(
+            body["id"].as_str().unwrap_or("peer"),
+            body["name"].as_str().unwrap_or("device"),
+            body["kind"].as_str().unwrap_or("phone"),
+            body["ram_mb"].as_u64().unwrap_or(0),
+            body["cores"].as_u64().unwrap_or(4) as u32,
+            body["arch"].as_str().unwrap_or("arm64"),
+        );
+        let rpc = body["rpc"].as_str().map(String::from);
+        {
+            let mut peers = inner.peers.lock().await;
+            peers.retain(|p| p.hw.id != hw.id);
+            peers.push(Peer { hw: hw.clone(), rpc: rpc.clone(), last_seen: std::time::Instant::now() });
+        }
+        // Only count memory we can actually use: a peer must have a reachable
+        // RPC worker, otherwise its budget is a promise it cannot keep.
+        let self_hw = inner.hardware.clone();
+        let mut usable = self_hw.budget_mb;
+        let mut usable_devices = 1u32;
+        let mut unusable = 0u32;
+        {
+            let peers = inner.peers.lock().await;
+            for p in peers.iter() {
+                let fresh = p.last_seen.elapsed() < std::time::Duration::from_secs(30);
+                let live = match &p.rpc {
+                    Some(r) if !r.is_empty() => crate::cluster::rpc_reachable(r).await,
+                    _ => false,
+                };
+                if fresh && live {
+                    usable += p.hw.budget_mb;
+                    usable_devices += 1;
+                } else {
+                    unusable += 1;
+                }
+            }
+        }
+        let b = json!({
+            "ok": true,
+            "you": { "budget_mb": hw.budget_mb, "threads": hw.threads },
+            "pool": {
+                "devices": usable_devices,
+                "total_budget_mb": usable,
+                "unusable_devices": unusable,
+                "note": if unusable > 0 {
+                    "devices that reported hardware but have no reachable RPC worker are not counted"
+                } else { "" },
+            }
+        });
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+    }
+    if path == "/peers" && method == "GET" {
+        let self_hw = inner.hardware.clone();
+        let peers = inner.peers.lock().await;
+        let list: Vec<Value> = std::iter::once(json!({
+            "id": self_hw.id, "name": self_hw.name, "kind": self_hw.kind,
+            "ram_mb": self_hw.ram_mb, "budget_mb": self_hw.budget_mb,
+            "cores": self_hw.cores, "threads": self_hw.threads,
+            "arch": self_hw.arch, "rpc": null, "self": true,
+        }))
+        .chain(peers.iter().map(|p| json!({
+            "id": p.hw.id, "name": p.hw.name, "kind": p.hw.kind,
+            "ram_mb": p.hw.ram_mb, "budget_mb": p.hw.budget_mb,
+            "cores": p.hw.cores, "threads": p.hw.threads,
+            "arch": p.hw.arch, "rpc": p.rpc, "self": false,
+            "stale": p.last_seen.elapsed() >= std::time::Duration::from_secs(30),
+        })))
+        .collect();
+        let b = json!({ "devices": list });
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+    }
+
+    if path == "/models" && method == "GET" {
+        let models = inner.models.lock().await;
+        let list: Vec<Value> = models.iter().map(|m| json!({
+            "name": m.name, "path": m.path, "params_b": m.params_b,
+            "size_mb": m.size_mb, "layers": m.layers,
+        })).collect();
+        let b = json!({ "models": list, "cluster_ready": inner.cluster.toolchain().is_some() });
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+    }
+
+    // Register a GGUF so it can be planned and served.
+    // Body: {"path": "/x.gguf", "name": "optional", "params_b": 4.0, "layers": 36}
+    if path == "/models" && method == "POST" {
+        let req: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+        let p = req["path"].as_str().unwrap_or("");
+        let meta = std::fs::metadata(p);
+        let size_mb = meta.as_ref().map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
+        if meta.is_err() {
+            let b = json!({ "error": format!("no such file: {p}") });
+            return respond_cors(&mut stream, 400, "application/json", b.to_string().as_bytes()).await;
+        }
+        let name = req["name"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(p)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "model".into())
+            });
+        let params_b = req["params_b"].as_f64();
+        let layers = req["layers"]
+            .as_u64()
+            .map(|l| l as u32)
+            .unwrap_or_else(|| ModelInfo::estimate_layers(params_b.unwrap_or(4.0)));
+        let m = ModelInfo {
+            name: name.clone(),
+            path: p.to_string(),
+            params_b,
+            size_mb,
+            layers,
+            kv_bytes_per_token: req["kv_bytes_per_token"].as_u64().unwrap_or(160_000),
+        };
+        NodeHandle { inner: inner.clone() }.add_model(m.clone()).await;
+        let b = json!({ "ok": true, "model": m });
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+    }
+
+    if path == "/cluster" && method == "GET" {
+        let st: ClusterStatus = inner.cluster.status().await;
+        let b = json!({
+            "state": st.state, "model": st.model, "endpoint": st.endpoint,
+            "peers": st.peers, "layers_on_self": st.layers_on_self,
+            "total_layers": st.total_layers, "error": st.error,
+            "log": st.log_path,
+            "toolchain": inner.cluster.toolchain().map(|t| json!({
+                "llama_server": t.llama_server.display().to_string(),
+                "rpc_server": t.rpc_server.display().to_string(),
+            })),
+        });
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+    }
+
+    // Body: {"model": "<name|path>", "ctx": 4096} — plans, then serves.
+    if path == "/cluster/start" && method == "POST" {
+        let req: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+        let want = req["model"].as_str().unwrap_or("").to_string();
+        let ctx = req["ctx"].as_u64().unwrap_or(inner.cfg.ctx as u64) as u32;
+        let handle = NodeHandle { inner: inner.clone() };
+
+        let models = handle.models_available().await;
+        let model = match models.iter().find(|m| m.name == want || m.path == want) {
+            Some(m) => m.clone(),
+            None => {
+                let b = json!({ "error": format!("unknown model '{want}' — see GET /models") });
+                return respond_cors(&mut stream, 404, "application/json", b.to_string().as_bytes()).await;
+            }
+        };
+
+        let plan = handle.plan_with(&model, ctx).await;
+        if !plan.fits() {
+            let b = json!({ "error": "split does not fit", "plan": plan });
+            return respond_cors(&mut stream, 507, "application/json", b.to_string().as_bytes()).await;
+        }
+
+        let st = inner
+            .cluster
+            .start(&plan, std::path::Path::new(&model.path), ctx)
+            .await;
+        let code = match &st {
+            Ok(s) => {
+                let running = s.state == crate::cluster::ClusterState::Running;
+                inner.status_tx.send_modify(|s2| {
+                    if running {
+                        s2.backend = "distributed".to_string();
+                    }
+                });
+                200
+            }
+            Err(_) => 500,
+        };
+        let b = match st {
+            Ok(s) => json!({ "ok": s.state == crate::cluster::ClusterState::Running, "status": s, "plan": plan }),
+            Err(e) => json!({ "ok": false, "error": e.to_string(), "plan": plan }),
+        };
+        return respond_cors(&mut stream, code, "application/json", b.to_string().as_bytes()).await;
+    }
+
+    if path == "/cluster/plan" && method == "POST" {
+        let req: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+        let want = req["model"].as_str().unwrap_or("").to_string();
+        let ctx = req["ctx"].as_u64().unwrap_or(inner.cfg.ctx as u64) as u32;
+        let handle = NodeHandle { inner: inner.clone() };
+        match handle.plan_model(&want, ctx).await {
+            Some(p) => {
+                let b = json!({ "plan": p });
+                return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
+            }
+            None => {
+                let b = json!({ "error": format!("unknown model '{want}'") });
+                return respond_cors(&mut stream, 404, "application/json", b.to_string().as_bytes()).await;
+            }
+        }
+    }
+
+    if path == "/cluster/stop" && method == "POST" {
+        let r = inner.cluster.stop().await;
+        let b = match r {
+            Ok(()) => json!({ "ok": true }),
+            Err(e) => json!({ "ok": false, "error": e.to_string() }),
+        };
+        return respond_cors(&mut stream, 200, "application/json", b.to_string().as_bytes()).await;
     }
 
     // Everything else under /v1 requires the token when pairing is on.

@@ -1,15 +1,33 @@
-fix(core): probe engine synchronously; parse /health model strings
+feat(core): hardware probe, split planner, cluster manager, QR pairing
 
-Three bugs found by running the release binary end-to-end:
+The node can now divide a model across devices and actually run it.
 
-- startup probe was async, so --status and the first chat request could see
-  backend=none just after launch. Probe now completes before start() returns,
-  with a 15s background recheck for late-starting engines.
-- /health returns models as ["a","b"] but the client parsed only
-  /v1/models-style [{"id":"a"}]. Zero models were reported while the
-  endpoint was correct. Parser now accepts both shapes, with a regression test.
-- chat with no backend attempted 127.0.0.1:8080 and reported a confusing 502.
-  Now returns 503 with an actionable message. Discovery port conflicts are
-  silent unless PRIVATELM_DEBUG is set.
+New modules:
+- hardware.rs  probes RAM/cores/threads and derives a memory budget, so a
+               device never promises memory it cannot spare. Phone numbers
+               arrive over POST /peers instead of being assumed.
+- plan.rs      split planner: distributes layers by budget share, charges KV
+               cache per layer, reports shortfall and a plain-English summary.
+- cluster.rs   runs the real thing: spawns ggml-rpc-server, then llama-server
+               with --rpc <self>,<peers>, waits for /health, supervises exits.
+               rpc_reachable() gates whether a peer counts at all.
+- qr.rs        pairing payload + terminal rendering. Encoder delegates to the
+               qrcode crate: a hand-written one produced grids that looked
+               right and did not scan.
 
-verified: --status lists models, --once streams a real reply
+New endpoints: POST/GET /peers, GET/POST /models, GET /cluster,
+POST /cluster/plan, POST /cluster/start, POST /cluster/stop.
+/pair now returns a privateml:// URI plus this device's hardware.
+
+Honesty fix: a peer that reports hardware but has no reachable RPC worker is
+excluded from plans and from the pool total, with the reason surfaced. An
+earlier demo had counted a fabricated phone and it silently inflated memory.
+
+verified end-to-end on real binaries:
+- probe: 7720 MB RAM -> 6320 MB budget, 3 threads
+- real rpc worker on :50111 counted, fake peer on :50052 excluded
+- plan: "Fits across 2 devices: local-rpc 19/36L + anon 17/36L"
+- start -> state=running -> chat returned 'SPLIT WORKS' through the split
+- QR payload decodes exactly with OpenCV (version 4, 37x37 modules)
+
+tests: 27 passing
