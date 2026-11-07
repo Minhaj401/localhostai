@@ -223,3 +223,48 @@ Release binary: **5.4 MB**, `target/release/privateml`.
 5. **Distributed mode in Rust** — cluster/RPC orchestration currently still
    lives only in the Python file, so it must be ported to `core/`.
 6. Release tooling: tag, checksums, install one-liner, licence, name check.
+
+---
+
+# Productization — phase 2 (split planning, devices, QR)
+
+## Built and verified
+
+| Feature | Where | Verified how |
+|---|---|---|
+| RAM/cores/threads probe | `core/hardware.rs` | real: 7720 MB → 6320 MB budget, 3 threads |
+| Layer split planner | `core/plan.rs` | unit tests + live `19/36L + 17/36L` plan |
+| Cluster manager | `core/cluster.rs` | spawned real rpc-server + llama-server, chat returned `SPLIT WORKS` |
+| Device pool API | `GET/POST /peers` | real worker usable, fake peer excluded |
+| Model registry | `GET/POST /models` | registered a real 2.4 GB GGUF |
+| `POST /cluster/plan` `/start` `/stop` | `core/server.rs` | live start → running → inference |
+| QR pairing | `core/qr.rs`, TUI `p` | OpenCV decoded the live URI exactly |
+| Model picker + pool | TUI `Up` | pool size shown, `D` runs distributed |
+| Device panel | TUI `d` | shows budget/threads and "NOT counted" reasons |
+| `--connect <URL>` | TUI flag | attaches to a running node |
+
+## Critical honesty rules (learned the hard way)
+
+1. **Never count memory you cannot reach.** A peer is only usable if its RPC
+   worker answers. Earlier a fabricated peer was counted and inflated the
+   pool; that is now impossible — `usable` is always a live probe result.
+2. **Stale ≠ dead.** Heartbeat age and reachability are separate facts and
+   are reported separately. A live worker with an old heartbeat keeps its
+   memory; a silent one does not.
+3. **Never hand-write a QR encoder.** The first one looked correct and failed
+   to scan. Use a maintained library and verify with a real decoder.
+
+## What is NOT done yet
+
+1. **The APK does not speak this protocol yet.** It must: scan the QR, store
+   the token, `POST /peers` with its RAM/cores on join, start its bundled
+   rpc-server, and heartbeat every ~10s so it doesn't go stale. Until then the
+   pool is laptop-only in practice.
+2. **Ollama-only models cannot be split.** Distributed mode needs a GGUF
+   path; `ollama` blobs are not registered with `/models` automatically.
+   Needs either a GGUF export step or a model downloader (the "self-contained"
+   half of option A).
+3. Model layer counts are estimated from parameter count unless the caller
+   supplies them; reading GGUF metadata (n_layer) would make plans exact.
+4. Still to delete: `laptop-node/`, `phone-rpc/`, `scripts/setup-distributed.sh`.
+5. Release hygiene: tag, checksums, licence, install one-liner.
