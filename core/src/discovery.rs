@@ -57,7 +57,12 @@ pub fn spawn(enabled: bool, seed: Advert) -> Result<watch::Sender<Advert>> {
             let sock = match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("[discovery] bind {DISCOVERY_PORT} failed: {e} (phone must use manual IP)");
+                    // Not fatal: another instance may hold the port, or the box
+                    // may not allow broadcast sockets. The phone can still use
+                    // a manual IP, so stay quiet unless asked to be noisy.
+                    if std::env::var("PRIVATELM_DEBUG").is_ok() {
+                        eprintln!("[discovery] disabled: {e} (phone can use manual IP)");
+                    }
                     return;
                 }
             };

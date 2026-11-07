@@ -172,19 +172,44 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         }
     });
 
-    // Engine probe (backend + models) in the background.
-    let probe = inner.clone();
+    // Engine probe: do it BEFORE returning so `--status` and the first chat
+    // request never see "none" just because detection is still running.
+    let (backend, models) = probe_engine(&inner.cfg).await;
+    inner.status_tx.send_modify(|s| {
+        s.backend = backend.clone();
+        s.models = models.clone();
+    });
+    if let Some(tx) = &inner.advert {
+        let mut a = tx.borrow().clone();
+        a.backend = backend.clone();
+        a.models = models.clone();
+        let _ = tx.send(a);
+    }
+
+    // Re-probe periodically: Ollama may start later, models may be pulled.
+    let recheck = inner.clone();
     tokio::spawn(async move {
-        let (backend, models) = probe_engine(&probe.cfg).await;
-        probe.status_tx.send_modify(|s| {
-            s.backend = backend.clone();
-            s.models = models.clone();
-        });
-        if let Some(tx) = &probe.advert {
-            let mut a = tx.borrow().clone();
-            a.backend = backend;
-            a.models = models;
-            let _ = tx.send(a);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        interval.tick().await; // first tick is immediate; skip it
+        loop {
+            interval.tick().await;
+            let (backend, models) = probe_engine(&recheck.cfg).await;
+            let changed = {
+                let cur = recheck.status_tx.borrow();
+                cur.backend != backend || cur.models != models
+            };
+            if changed {
+                recheck.status_tx.send_modify(|s| {
+                    s.backend = backend.clone();
+                    s.models = models.clone();
+                });
+                if let Some(tx) = &recheck.advert {
+                    let mut a = tx.borrow().clone();
+                    a.backend = backend;
+                    a.models = models;
+                    let _ = tx.send(a);
+                }
+            }
         }
     });
 
@@ -420,7 +445,10 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
 
     let backend = inner.status_tx.borrow().backend.clone();
     if backend == "none" {
-        let b = json!({ "error": { "message": "no inference engine available (install Ollama or let PrivateLM download a model)", "type": "server_error" } });
+        let msg = "No model backend found. Start Ollama (`ollama serve`) or \
+                   llama-server on this machine, then retry — PrivateLM picks it up \
+                   within 15s, or restart it.";
+        let b = json!({ "error": { "message": msg, "type": "server_error" } });
         return respond_cors(&mut stream, 503, "application/json", b.to_string().as_bytes()).await;
     }
 

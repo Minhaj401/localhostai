@@ -1,155 +1,125 @@
-# PrivateLM-LAN
+# PrivateLM
 
-A clone of [PrivateLM](../../cross-platform-llm-client/) (cross-platform LLM chat client) with one
-big addition: **the phone can offload inference to your laptop** over the LAN.
-
-Where PrivateLM offers *on-device* (llama.cpp) and *cloud* backends, this clone adds a third:
-**Laptop node** — your laptop's CPU/GPU does the heavy token generation, the phone just relays
-the stream. Same privacy property as on-device mode: nothing leaves your network.
+**Your laptop and your phone, one private LLM.** No cloud, no Python, no
+config files to hand-edit. Two things to install: this binary and the app.
 
 ```
-┌──────────────┐  UDP discover    ┌─────────────────────────────┐
-│  Flutter app │ ───────────────► │ laptop-node (this repo)     │
-│  (phone/PC)  │  HTTP stream     │  OpenAI-compatible proxy    │
-│              │ ◄─────────────── │  → Ollama / llama-server    │
-└──────────────┘                  │  (laptop CPU/GPU)           │
-        │                         └─────────────────────────────┘
-        └── cloud fallback: OpenAI / Anthropic / any OpenAI-compatible API
+  ┌──────────────────────────────┐            ┌──────────────────────────┐
+  │  privateml  (this binary)    │   LAN HTTP │  PrivateLM APK (phone)   │
+  │                              │ ◄───────── │  chat UI                 │
+  │  chat UI in your terminal    │            │  + compute worker        │
+  │  + embedded node:            │            │    (libggmlrpc.so)       │
+  │      HTTP API, discovery,    │            │                          │
+  │      engine management       │ ─────────► │  layer split over RPC    │
+  └───────────┬──────────────────┘            └──────────────────────────┘
+              │
+        Ollama / llama.cpp already on your machine
 ```
 
-## Layout
+The laptop node is **not a service you run**. It is a task inside the
+`privateml` process, so `privateml` gives you a chat UI *and* makes this
+machine available to your phone at the same time.
 
-```
-laptop-node/     Python FastAPI node: /health, /v1/chat/completions (SSE),
-                 UDP discovery responder on :50897
-tui/             Rust terminal client (ratatui) — runs on the laptop itself,
-                 talks to the node (or any OpenAI-compatible server)
-app/             Flutter client (GetX) — Android APK + web, same layering as
-                 PrivateLM: UI → ChatController → LlmBackend implementations
-```
-
-## Rust TUI (runs on the laptop)
+## Quick start
 
 ```bash
-cd tui
 cargo build --release
-./target/release/privatelm-tui                    # interactive TUI
-./target/release/privatelm-tui --once "hi"        # single-shot, testable
-PRIVATELM_NODE=http://192.168.1.20:8765 privatelm-tui   # remote node
+./target/release/privateml
 ```
 
-Keys: type → Enter to send · ↑ opens model picker · Esc quits.
+That's it. It:
 
-## APK
+1. creates `~/.privateml/` (config + pair token) on first run
+2. detects Ollama or llama.cpp already running on this machine
+3. starts the LAN node on the first free port at or above 8765
+4. opens the chat UI
 
-Prebuilt: `PrivateLM-LAN.apk` (release, ~21MB). Rebuild with:
+Chat with your laptop alone, or open the phone app and it appears in the
+node list automatically.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `privateml` | node + interactive chat UI |
+| `privateml --status` | print address, backend, models, pairing — then exit |
+| `privateml --headless` | node only, no UI (SSH, systemd, servers) |
+| `privateml --once "hello"` | one streamed reply, then exit |
+| `privateml --port 9000` | force the listen port |
+| `privateml --name "studio"` | name shown on the phone |
+| `privateml --require-pairing` | make the pair token mandatory |
+| `privateml --no-lan` | loopback only, phone cannot connect |
+| `privateml --no-discovery` | don't answer UDP broadcasts |
+
+In the UI: type → **Enter** to send · **↑** model picker · **Esc** to quit.
+
+## Files
+
+```
+~/.privateml/config.toml   settings (node_name, port, engine, ...)
+~/.privateml/pair_token    shared secret the phone must present
+~/.privateml/models/       downloaded GGUF models
+~/.privateml/logs/
+```
+
+## Node API
+
+OpenAI-compatible, so any client that speaks `chat/completions` works:
+
+```
+GET  /health              status, backend, models  (public)
+GET  /v1/models           model list
+POST /v1/chat/completions streaming (SSE) or not
+GET  /pair                token for the QR code
+POST /pair/verify         confirm a token
+```
+
+With `require_pairing = true` every `/v1` request needs
+`Authorization: Bearer <pair_token>`.
 
 ```bash
-cd app && flutter build apk --release
-# → build/app/outputs/flutter-apk/app-release.apk
+curl -X POST localhost:8765/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen2.5:0.5b","stream":true,
+       "messages":[{"role":"user","content":"hi"}]}'
 ```
 
-## Backends (pluggable via `LlmBackend`)
+## Engines
 
-| id          | Where inference runs            | Status in this repo             |
-|-------------|---------------------------------|---------------------------------|
-| `laptop`    | Your laptop (Ollama/llama.cpp)  | ✅ Working                       |
-| `cloud`     | OpenAI-compatible API           | ✅ Working (key in Settings)     |
-| `anthropic` | Anthropic Messages API          | ✅ Working                       |
-| `local`     | On-device llama.cpp             | 🚧 Stub — see integration seam   |
+The node uses whatever is already on the machine, in this order:
 
-All backends implement the same `chat()` stream, so the chat UI is
-backend-agnostic — exactly like PrivateLM's `InferenceService`/`CloudService` split.
+1. **managed** — a llama-server PrivateLM started itself
+2. **ollama** — auto-detected on `127.0.0.1:11434`
+3. **llamacpp** — auto-detected on `127.0.0.1:8080`
 
-## Distributed mode — laptop + phone memory pooled (llama.cpp RPC)
+Override in `config.toml` with `engine` and `ollama_url` / `llamacpp_url`.
 
-Model layers and KV cache are split across devices, so you can run models
-bigger than either device's RAM alone. Latency per token is bounded by the
-Wi-Fi link; memory pooling is the win.
+## Distributed mode
+
+Model layers and KV cache split across laptop and phone RAM, so a model
+bigger than either device can hold still runs. The APK ships an ARM64
+`rpc-server` as `libggmlrpc.so`; switching on **"Share this phone's
+compute"** makes the phone a peer. Latency is bounded by Wi-Fi; the win is
+memory.
+
+## Repository layout
 
 ```
-phone (Termux):  rpc-server :50052   ← holds its share of layers in RAM
-laptop:          llama-server --rpc <phone>:50052
-                 └── node proxies it as backend "distributed"
+core/          privateml-core — the node, as a library
+  config.rs    config.toml, dirs, pair token, port selection
+  discovery.rs UDP responder + probe (phone finds this machine)
+  server.rs    HTTP node: health, models, SSE chat, pairing
+  api.rs       client used by the UI and tests
+tui/           privateml — the binary: UI + node wiring
+app/           Flutter APK (chat UI + compute worker)
+laptop-node/   legacy Python node — superseded by core/, kept for reference
+phone-rpc/     legacy Termux script — superseded by the in-APK worker
+scripts/       llama.cpp build helpers
 ```
 
-**Laptop (one-time):**
-```bash
-bash scripts/setup-distributed.sh        # builds llama-server + rpc-server
-```
+## Privacy
 
-**Phone (Termux alternative — the APK has this built in):**
-
-The APK ships a bundled ARM64 `rpc-server` (`libggmlrpc.so`). In the app:
-**laptop icon → "Share this phone's compute" → switch on**. The worker
-listens on :50052 and the laptop auto-discovers it. Keep the app open
-(Android pauses background processes). Only use the Termux script if you
-want the worker without running the app:
-
-```bash
-pkg install git cmake clang make -y
-bash phone-rpc/setup-termux.sh build     # ~10-20 min
-bash phone-rpc/setup-termux.sh run       # prints phone IP:50052
-```
-
-**Start a distributed run (laptop):**
-```bash
-curl -X POST localhost:8765/cluster/start -H 'Content-Type: application/json' \
-  -d '{"model": "/path/to/model.gguf", "ctx": 4096}'
-# peers auto-discovered by scanning the /24 on :50052
-```
-
-`GET /cluster` lists detected RPC peers; `POST /cluster/stop` returns to the
-local backend. While a cluster is running, the node's backend is
-"distributed" — the app and TUI need no changes.
-
-Layer split is automatic (llama.cpp's scheduler balances by free memory per
-host). Threads per device follow PrivateLM's device-tier idea — see
-`phone-rpc/setup-termux.sh`.
-
-## Run the laptop node
-
-```bash
-cd laptop-node
-./run.sh                    # first run creates .venv and installs deps
-```
-
-Requirements: Python 3.10+, and one of:
-- **Ollama** — `ollama serve` (auto-detected at `127.0.0.1:11434`)
-- **llama.cpp** — `llama-server --port 8080` (auto-detected)
-
-Env overrides: `PRIVATELM_PORT`, `PRIVATELM_BACKEND` (`ollama|llamacpp|auto`),
-`PRIVATELM_NODE_NAME`, `PRIVATELM_OLLAMA_URL`, `PRIVATELM_LLAMACPP_URL`,
-`PRIVATELM_SERVE_WEB=1` (optionally serve the Flutter web build at `/app/`).
-
-Verify: `curl http://localhost:8765/health`
-
-## Run the app
-
-```bash
-cd app
-flutter pub get
-flutter run                 # Android, iOS, macOS, or web
-```
-
-No Flutter SDK? The app targets the same platforms as PrivateLM
-(Android/iOS/web); the `local` backend is intentionally stubbed — wire
-llama.cpp into `lib/services/local_inference_stub.dart` (the file documents
-the conditional-import seam) if you want on-device too.
-
-In the app:
-1. Tap the **laptop icon** → nodes are discovered automatically (UDP broadcast).
-2. If your Wi-Fi blocks broadcast, use **Add node manually** with `http://<laptop-ip>:8765`.
-3. Pick a model, chat. Replies stream token-by-token from the laptop.
-
-## Privacy model
-
-- Chat history + settings: local Hive box, never synced.
-- Laptop mode: traffic stays on your LAN; the laptop sees prompts, nobody else does.
-- Cloud mode: keys stored locally, sent only to the provider endpoint.
-
-## What's deliberately different from PrivateLM
-
-- Laptop node instead of (not instead of — *in addition to*) on-device GGUF.
-- Discovery: UDP broadcast responder/client, so no manual IP typing on the phone.
-- No Firebase/background services yet; the task-management view isn't cloned.
+- History and settings live only on your machines.
+- Laptop mode: prompts never leave your LAN.
+- Pairing tokens are generated from `/dev/urandom`, stored `0600`.
+- No telemetry, no accounts, no cloud unless you configure a cloud backend.

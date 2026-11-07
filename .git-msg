@@ -1,0 +1,15 @@
+fix(core): probe engine synchronously; parse /health model strings
+
+Three bugs found by running the release binary end-to-end:
+
+- startup probe was async, so --status and the first chat request could see
+  backend=none just after launch. Probe now completes before start() returns,
+  with a 15s background recheck for late-starting engines.
+- /health returns models as ["a","b"] but the client parsed only
+  /v1/models-style [{"id":"a"}]. Zero models were reported while the
+  endpoint was correct. Parser now accepts both shapes, with a regression test.
+- chat with no backend attempted 127.0.0.1:8080 and reported a confusing 502.
+  Now returns 503 with an actionable message. Discovery port conflicts are
+  silent unless PRIVATELM_DEBUG is set.
+
+verified: --status lists models, --once streams a real reply

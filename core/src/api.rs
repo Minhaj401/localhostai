@@ -72,9 +72,18 @@ impl Node {
             ok: h["ok"].as_bool().unwrap_or(false),
             name: h["name"].as_str().unwrap_or("?").into(),
             backend: h["backend"].as_str().unwrap_or("none").into(),
+            // /health returns plain strings; /v1/models returns objects.
             models: h["models"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| {
+                            m.as_str()
+                                .map(String::from)
+                                .or_else(|| m["id"].as_str().map(String::from))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             pairing: h["pairing"].as_bool().unwrap_or(false),
             version: h["version"].as_str().unwrap_or("").into(),
@@ -158,5 +167,45 @@ pub fn friendly(status: u16, body: &str) -> String {
         format!("HTTP {status}{hint}")
     } else {
         format!("HTTP {status}{hint}: {detail}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Regression: /health returns `"models": ["a","b"]` (strings) while
+    /// /v1/models returns `"data":[{"id":"a"}]` (objects). A single parser that
+    /// only handled the object shape silently reported zero models.
+    #[test]
+    fn health_models_parse_both_shapes() {
+        let strings = json!({ "ok": true, "name": "n", "backend": "ollama",
+                              "models": ["qwen3:4b", "llama3"], "pairing": false,
+                              "version": "0.2.0" });
+        let objs = json!({ "ok": true, "name": "n", "backend": "ollama",
+                           "models": [{"id": "qwen3:4b"}, {"id": "llama3"}],
+                           "pairing": false, "version": "0.2.0" });
+
+        for v in [strings, objs] {
+            let list: Vec<String> = v["models"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| {
+                            m.as_str().map(String::from).or_else(|| m["id"].as_str().map(String::from))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert_eq!(list, vec!["qwen3:4b", "llama3"], "shape: {v}");
+        }
+    }
+
+    #[test]
+    fn friendly_hints_are_actionable() {
+        assert!(friendly(401, "").contains("paired"));
+        assert!(friendly(503, "").contains("model"));
+        assert_eq!(friendly(500, "boom"), "HTTP 500: boom");
     }
 }
