@@ -1,0 +1,12 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s11-title", "bySec": 0.5 },
+    { "kind": "appearsBy", "selector": "#s11-models", "bySec": 1.0 },
+    { "kind": "before", "a": "#s11-search-query", "b": "#s11-selected-model" },
+    { "kind": "before", "a": "#s11-selected-model", "b": "#s11-selection-check" },
+    { "kind": "before", "a": "#s11-selection-check", "b": "#s11-install-status" },
+    { "kind": "staysInFrame", "selector": "#s11-models" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

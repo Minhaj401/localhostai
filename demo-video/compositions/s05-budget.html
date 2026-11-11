@@ -1,0 +1,149 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position:absolute; inset:0; }
+
+    .s05-phone { position:absolute; left:16px; top:8px; width:368px; height:588px; }
+    .s05-phone-shell { position:absolute; inset:0; width:368px; height:588px; }
+    .s05-phone-label { position:absolute; left:40px; top:66px; }
+    .s05-chip { position:absolute; left:48px; top:136px; width:272px; height:204px; }
+    .s05-chip-shell { position:absolute; inset:0; width:272px; height:204px; }
+    .s05-chip-title { position:absolute; left:22px; top:50px; width:228px; text-align:center; font-size:48px; font-weight:500; line-height:1.1; }
+    .s05-chip-label { position:absolute; left:22px; top:116px; width:228px; text-align:center; font-size:28px; line-height:1.2; }
+    .s05-worker-state { position:absolute; left:38px; top:394px; width:292px; }
+    .s05-reachable { margin-top:12px; }
+    .s05-worker-note { margin-top:14px; font-size:28px; line-height:1.25; }
+    .s05-cutaway-guides { position:absolute; inset:0; width:1536px; height:602px; }
+
+    .s05-memory { position:absolute; left:608px; top:32px; width:912px; height:552px; display:grid; grid-template-rows:76px 206px 126px 136px; border:4px solid #A1A1AA; border-radius:16px; background:#0A0A0B; }
+    .s05-memory-header { display:flex; align-items:center; justify-content:space-between; padding:0 32px; }
+    .s05-memory-title { font-size:34px; font-weight:500; line-height:1.15; }
+    .s05-usable { display:flex; flex-direction:column; justify-content:center; gap:14px; padding:24px 32px; background:#5CF26A; color:#000000; }
+    .s05-usable-title { font-size:48px; font-weight:500; line-height:1.1; letter-spacing:-.7px; }
+    .s05-usable-note { font-size:32px; line-height:1.3; }
+    .s05-reserved { display:grid; grid-template-columns:1fr auto; grid-template-rows:auto auto; align-content:center; gap:8px 32px; padding:18px 32px; border-top:4px solid #A1A1AA; }
+    .s05-rpc { background:#16161A; }
+    .s05-os { background:#101012; border-radius:0 0 11px 11px; }
+    .s05-region-title { font-size:36px; font-weight:500; line-height:1.1; }
+    .s05-reserve-value { font-size:32px; line-height:1.2; }
+    .s05-reserve-note { grid-column:1 / -1; font-size:28px; line-height:1.2; }
+  </style>
+  <div id="root" data-composition-id="s05" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s05-title" class="headline" data-var-text="s05-title">Keep room for the OS</h1>
+      <p id="s05-example" class="example-note">Illustrative example</p>
+
+      <div id="s05-stage" class="stage">
+        <div id="s05-phone" class="s05-phone">
+          <svg id="s05-phone-shell" class="s05-phone-shell" viewBox="0 0 368 588" aria-hidden="true">
+            <rect x="2" y="2" width="364" height="584" rx="36" fill="#0A0A0B" stroke="#A1A1AA" stroke-width="4" />
+            <rect x="20" y="42" width="328" height="508" rx="24" fill="#000000" stroke="#2E2E35" stroke-width="3" />
+            <circle cx="184" cy="22" r="5" fill="#A1A1AA" />
+            <path d="M144 568H224" stroke="#A1A1AA" stroke-width="4" stroke-linecap="round" />
+          </svg>
+          <p id="s05-phone-label" class="mono muted s05-phone-label">Phone</p>
+
+          <div id="s05-chip" class="s05-chip">
+            <svg id="s05-chip-shell" class="s05-chip-shell" viewBox="0 0 272 204" aria-hidden="true">
+              <path d="M64 2V22M112 2V22M160 2V22M208 2V22M64 182V202M112 182V202M160 182V202M208 182V202M2 54H22M2 102H22M2 150H22M250 54H270M250 102H270M250 150H270" class="line" />
+              <rect x="22" y="22" width="228" height="160" rx="8" fill="#101012" stroke="#A1A1AA" stroke-width="4" />
+            </svg>
+            <h2 id="s05-chip-title" class="s05-chip-title">RAM</h2>
+            <p id="s05-chip-label" class="muted s05-chip-label">Phone memory</p>
+          </div>
+
+          <div id="s05-worker-state" class="s05-worker-state">
+            <p id="s05-worker-label" class="mono muted">RPC worker</p>
+            <div id="s05-reachable" class="status s05-reachable">
+              <span id="s05-reachable-dot" class="status-dot" aria-hidden="true"></span>
+              <span>Reachable</span>
+            </div>
+            <p id="s05-worker-note" class="muted s05-worker-note">Required for inclusion</p>
+          </div>
+        </div>
+
+        <!-- These leaders attach the enlarged memory section to the phone's RAM package. -->
+        <svg id="s05-cutaway-guides" class="s05-cutaway-guides" viewBox="0 0 1536 602" aria-hidden="true">
+          <path id="s05-cutaway-top" class="line" pathLength="1" d="M314 166L608 112" />
+          <path id="s05-cutaway-bottom" class="line" pathLength="1" d="M314 326L608 582" />
+        </svg>
+
+        <!-- One contiguous schematic: region areas do not encode an available or total RAM value. -->
+        <div id="s05-memory" class="s05-memory">
+          <div id="s05-memory-header" class="s05-memory-header">
+            <h2 id="s05-memory-title" class="s05-memory-title">Phone memory</h2>
+            <p id="s05-scale-note" class="mono muted">Not to scale</p>
+          </div>
+
+          <div id="s05-usable" class="s05-usable">
+            <h3 id="s05-usable-title" class="s05-usable-title">Usable for the model</h3>
+            <p id="s05-usable-note" class="s05-usable-note">Layers + context memory</p>
+          </div>
+
+          <div id="s05-rpc" class="s05-reserved s05-rpc">
+            <h3 id="s05-rpc-title" class="s05-region-title">RPC headroom</h3>
+            <p id="s05-rpc-value" class="mono s05-reserve-value">256 MiB</p>
+            <p id="s05-rpc-note" class="muted s05-reserve-note">Kept for the native worker</p>
+          </div>
+
+          <div id="s05-os" class="s05-reserved s05-os">
+            <h3 id="s05-os-title" class="s05-region-title">OS reserve</h3>
+            <p id="s05-os-value" class="mono s05-reserve-value">900 MiB</p>
+            <p id="s05-os-note" class="muted s05-reserve-note">Kept for Android</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.set("#s05-cutaway-top, #s05-cutaway-bottom", { strokeDasharray: 1 });
+    tl.fromTo("#s05-title",
+      { opacity: 0, filter: "blur(10px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.45, ease: "power3.out" },
+      0.25);
+    tl.fromTo("#s05-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.35, ease: "power3.out" },
+      0.62);
+    tl.fromTo("#s05-phone-shell, #s05-phone-label",
+      { opacity: 0, x: -34 },
+      { opacity: 1, x: 0, duration: 0.65, stagger: 0.08, ease: "power3.out" },
+      0.55);
+    tl.fromTo("#s05-chip",
+      { opacity: 0, scale: 0.9, filter: "blur(7px)", transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "50% 50%", duration: 0.65, ease: "power3.out" },
+      1.0);
+    tl.fromTo("#s05-memory",
+      { opacity: 0, scaleX: 0.96, transformOrigin: "0% 50%" },
+      { opacity: 1, scaleX: 1, transformOrigin: "0% 50%", duration: 0.6, ease: "power3.out" },
+      1.25);
+    tl.fromTo("#s05-cutaway-top, #s05-cutaway-bottom",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.8, stagger: 0.1, ease: "power2.inOut" },
+      1.55);
+    tl.fromTo("#s05-os",
+      { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.55, ease: "power3.out" },
+      2.35);
+    tl.fromTo("#s05-rpc",
+      { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.55, ease: "power3.out" },
+      3.05);
+    tl.fromTo("#s05-usable",
+      { opacity: 0, scaleY: 0.82, transformOrigin: "50% 100%" },
+      { opacity: 1, scaleY: 1, transformOrigin: "50% 100%", duration: 0.7, ease: "power3.out" },
+      3.75);
+    tl.fromTo("#s05-worker-label, #s05-worker-note",
+      { opacity: 0, filter: "blur(5px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.4, stagger: 0.12, ease: "power3.out" },
+      4.55);
+    tl.fromTo("#s05-reachable",
+      { opacity: 0, scale: 0.9, filter: "blur(6px)", transformOrigin: "0% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "0% 50%", duration: 0.6, ease: "power3.out" },
+      5.05);
+
+    window.__timelines['s05'] = tl;
+  </script>
+</template>

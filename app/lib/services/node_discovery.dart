@@ -25,7 +25,8 @@ class NodeDiscovery {
     if (kIsWeb) return const [];
     final found = <String, Map<String, dynamic>>{};
 
-    final udp = _udpDiscover(timeout: timeout).catchError((_) => <Map<String, dynamic>>[]);
+    final udp = _udpDiscover(timeout: timeout)
+        .catchError((_) => <Map<String, dynamic>>[]);
     final scan = _scanSubnet().catchError((_) => <Map<String, dynamic>>[]);
     final results = await Future.wait([udp, scan]);
 
@@ -49,17 +50,16 @@ class NodeDiscovery {
         includeLoopback: false,
         type: InternetAddressType.IPv4,
       );
-      for (final _ in interfaces) {
-        try {
-          final sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-          sock.broadcastEnabled = true;
-          sockets.add(sock);
-          sock.send(
-            utf8.encode(magic),
-            InternetAddress('255.255.255.255', type: InternetAddressType.IPv4),
-            discoveryPort,
-          );
-        } catch (_) {}
+      for (final iface in interfaces) {
+        for (final address in iface.addresses) {
+          try {
+            final sock = await RawDatagramSocket.bind(address, 0);
+            sock.broadcastEnabled = true;
+            sockets.add(sock);
+            sock.send(utf8.encode(magic), InternetAddress('255.255.255.255'),
+                discoveryPort);
+          } catch (_) {}
+        }
       }
 
       final deadline = DateTime.now().add(timeout);
@@ -68,8 +68,14 @@ class NodeDiscovery {
           final dg = sock.receive();
           if (dg == null) continue;
           try {
-            final node = jsonDecode(utf8.decode(dg.data)) as Map<String, dynamic>;
-            final key = '${node['name']}:${node['port']}';
+            final node =
+                jsonDecode(utf8.decode(dg.data)) as Map<String, dynamic>;
+            final port = node['port'];
+            if (port is! int ||
+                port <= 0 ||
+                port > 65535 ||
+                node['name'] is! String) continue;
+            final key = '${dg.address.address}:$port';
             if (seen.add(key)) {
               node['address'] = dg.address.address;
               results.add(node);
@@ -96,19 +102,26 @@ class NodeDiscovery {
     if (octets.length != 4) return [];
     final prefix = octets.sublist(0, 3).join('.');
 
-    final probes = <Future<Map<String, dynamic>?>>[];
-    for (var i = 1; i <= 254; i++) {
-      final ip = '$prefix.$i';
-      if (ip == me.address) continue;
-      probes.add(_probeHealth(ip));
+    final client = http.Client();
+    try {
+      final probes = <Future<Map<String, dynamic>?>>[];
+      for (var i = 1; i <= 254; i++) {
+        final ip = '$prefix.$i';
+        if (ip == me.address) continue;
+        probes.add(_probeHealth(client, ip));
+      }
+      final results = await Future.wait(probes);
+      return results.whereType<Map<String, dynamic>>().toList();
+    } finally {
+      // Future.timeout alone does not close the underlying HTTP sockets.
+      client.close();
     }
-    final results = await Future.wait(probes);
-    return results.whereType<Map<String, dynamic>>().toList();
   }
 
-  Future<Map<String, dynamic>?> _probeHealth(String ip) async {
+  Future<Map<String, dynamic>?> _probeHealth(
+      http.Client client, String ip) async {
     try {
-      final r = await http
+      final r = await client
           .get(Uri.parse('http://$ip:$nodePort/health'))
           .timeout(const Duration(milliseconds: 900));
       if (r.statusCode == 200) {

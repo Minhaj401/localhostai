@@ -1,0 +1,4 @@
+# Keep upstream font licenses and the bundled animation runtime verbatim.
+app/assets/fonts/*.txt whitespace=-blank-at-eol
+demo-video/assets/fonts/*LICENSE.txt whitespace=-blank-at-eol
+demo-video/assets/vendor/*.min.js whitespace=-blank-at-eol,-blank-at-eof

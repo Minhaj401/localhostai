@@ -1,0 +1,1 @@
+The answer streams back. In laptop mode, prompts stay on your LAN: one model across your devices.

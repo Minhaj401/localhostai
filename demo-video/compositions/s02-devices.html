@@ -1,0 +1,147 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position: absolute; inset: 0; }
+    .s02-diagram { font-family: Outfit, sans-serif; }
+    .s02-bezel { fill: #101012; stroke: #FFFFFF; stroke-width: 4; }
+    .s02-screen { fill: #000000; stroke: #A1A1AA; stroke-width: 3; }
+    .s02-detail { fill: none; stroke: #A1A1AA; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .s02-bay { fill: #000000; stroke: #5CF26A; stroke-width: 3; }
+    .s02-layer { fill: #5CF26A; stroke: #5CF26A; stroke-width: 3; }
+    .s02-link { fill: none; stroke: #5CF26A; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+    .s02-port { fill: #000000; stroke: #5CF26A; stroke-width: 4; }
+    .s02-label { fill: #FFFFFF; font-size: 34px; font-weight: 400; }
+    .s02-meta { fill: #A1A1AA; font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 500; }
+    .s02-phone-title { fill: #FFFFFF; font-size: 40px; font-weight: 500; }
+    .s02-phone-count { fill: #FFFFFF; font-size: 48px; font-weight: 500; }
+    .s02-link-label { fill: #A1A1AA; font-size: 30px; font-weight: 400; }
+  </style>
+  <div id="root" data-composition-id="s02" data-width="1920" data-height="1080" data-duration="7.5">
+    <div id="s02-scene" class="scene">
+      <h1 id="s02-title" class="headline" data-var-text="s02-title">One model. Two devices.</h1>
+      <p id="s02-example" class="example-note">Illustrative example</p>
+
+      <svg id="s02-diagram" class="stage s02-diagram" width="1536" height="602" viewBox="0 0 1536 602" role="img" aria-labelledby="s02-diagram-title s02-diagram-description">
+        <title id="s02-diagram-title">One model shared by a laptop and phone over the local network</title>
+        <desc id="s02-diagram-description">The same illustrative Qwen 2.5 7B Instruct model contains exactly 28 blocks: 25 inside the laptop and three inside the connected phone. Both devices have visible bezels and inset screens.</desc>
+
+        <!-- Keep the first shot's laptop and layer geometry for a later match cut. -->
+        <g id="s02-laptop">
+          <rect id="s02-laptop-bezel" class="s02-bezel" x="48" y="12" width="1024" height="516" rx="24" />
+          <circle id="s02-laptop-camera" cx="560" cy="28" r="4" fill="#A1A1AA" />
+          <rect id="s02-laptop-screen" class="s02-screen" x="72" y="44" width="976" height="452" rx="12" />
+          <path id="s02-screen-header-rule" class="s02-detail" d="M72 120H1048" />
+          <text id="s02-model-name" class="s02-label" x="104" y="96">Qwen 2.5 7B Instruct</text>
+          <text id="s02-model-total" class="s02-meta" x="1016" y="94" text-anchor="end">28 layers</text>
+
+          <g id="s02-safe-memory">
+            <rect id="s02-safe-memory-boundary" class="s02-bay" x="96" y="138" width="928" height="340" rx="8" />
+            <text id="s02-laptop-label" class="s02-label" x="120" y="178">Laptop · safe memory</text>
+            <text id="s02-laptop-count" class="s02-meta" x="1000" y="176" text-anchor="end">25 layers</text>
+
+            <g id="s02-laptop-layers" data-layer-count="25">
+              <rect id="s02-layer-01" class="s02-layer" x="128" y="202" width="160" height="40" rx="5" />
+              <rect id="s02-layer-02" class="s02-layer" x="304" y="202" width="160" height="40" rx="5" />
+              <rect id="s02-layer-03" class="s02-layer" x="480" y="202" width="160" height="40" rx="5" />
+              <rect id="s02-layer-04" class="s02-layer" x="656" y="202" width="160" height="40" rx="5" />
+              <rect id="s02-layer-05" class="s02-layer" x="832" y="202" width="160" height="40" rx="5" />
+              <rect id="s02-layer-06" class="s02-layer" x="128" y="254" width="160" height="40" rx="5" />
+              <rect id="s02-layer-07" class="s02-layer" x="304" y="254" width="160" height="40" rx="5" />
+              <rect id="s02-layer-08" class="s02-layer" x="480" y="254" width="160" height="40" rx="5" />
+              <rect id="s02-layer-09" class="s02-layer" x="656" y="254" width="160" height="40" rx="5" />
+              <rect id="s02-layer-10" class="s02-layer" x="832" y="254" width="160" height="40" rx="5" />
+              <rect id="s02-layer-11" class="s02-layer" x="128" y="306" width="160" height="40" rx="5" />
+              <rect id="s02-layer-12" class="s02-layer" x="304" y="306" width="160" height="40" rx="5" />
+              <rect id="s02-layer-13" class="s02-layer" x="480" y="306" width="160" height="40" rx="5" />
+              <rect id="s02-layer-14" class="s02-layer" x="656" y="306" width="160" height="40" rx="5" />
+              <rect id="s02-layer-15" class="s02-layer" x="832" y="306" width="160" height="40" rx="5" />
+              <rect id="s02-layer-16" class="s02-layer" x="128" y="358" width="160" height="40" rx="5" />
+              <rect id="s02-layer-17" class="s02-layer" x="304" y="358" width="160" height="40" rx="5" />
+              <rect id="s02-layer-18" class="s02-layer" x="480" y="358" width="160" height="40" rx="5" />
+              <rect id="s02-layer-19" class="s02-layer" x="656" y="358" width="160" height="40" rx="5" />
+              <rect id="s02-layer-20" class="s02-layer" x="832" y="358" width="160" height="40" rx="5" />
+              <rect id="s02-layer-21" class="s02-layer" x="128" y="410" width="160" height="40" rx="5" />
+              <rect id="s02-layer-22" class="s02-layer" x="304" y="410" width="160" height="40" rx="5" />
+              <rect id="s02-layer-23" class="s02-layer" x="480" y="410" width="160" height="40" rx="5" />
+              <rect id="s02-layer-24" class="s02-layer" x="656" y="410" width="160" height="40" rx="5" />
+              <rect id="s02-layer-25" class="s02-layer" x="832" y="410" width="160" height="40" rx="5" />
+            </g>
+          </g>
+
+          <path id="s02-laptop-base" class="s02-bezel" stroke-linejoin="round" d="M48 528H1072L1120 556V560Q1120 572 1100 572H24Q4 572 4 560V556Z" />
+          <path id="s02-laptop-base-notch" class="s02-detail" d="M448 529L466 547H654L672 529" />
+        </g>
+
+        <!-- The phone's three blocks continue this model, rather than duplicating it. -->
+        <g id="s02-phone">
+          <rect id="s02-phone-bezel" class="s02-bezel" x="1216" y="12" width="304" height="560" rx="44" />
+          <rect id="s02-phone-screen" class="s02-screen" x="1236" y="40" width="264" height="502" rx="30" />
+          <circle id="s02-phone-camera" class="s02-screen" cx="1368" cy="62" r="7" />
+          <text id="s02-phone-label" class="s02-phone-title" x="1368" y="128" text-anchor="middle">Phone</text>
+          <text id="s02-phone-count" class="s02-phone-count" x="1368" y="194" text-anchor="middle">3 layers</text>
+          <text id="s02-phone-model-label" class="s02-meta" x="1368" y="238" text-anchor="middle">Same model</text>
+          <g id="s02-phone-layers" data-layer-count="3">
+            <rect id="s02-layer-26" class="s02-layer" x="1288" y="270" width="160" height="40" rx="5" />
+            <rect id="s02-layer-27" class="s02-layer" x="1288" y="326" width="160" height="40" rx="5" />
+            <rect id="s02-layer-28" class="s02-layer" x="1288" y="382" width="160" height="40" rx="5" />
+          </g>
+          <text id="s02-phone-role" class="s02-meta" x="1368" y="486" text-anchor="middle">Shared compute</text>
+          <path id="s02-phone-gesture-bar" class="s02-detail" d="M1328 556H1408" />
+        </g>
+
+        <g id="s02-local-network">
+          <text id="s02-local-network-label" class="s02-link-label" x="1144" y="256" text-anchor="middle">
+            <tspan id="s02-local-network-line-1" x="1144">Local</tspan>
+            <tspan id="s02-local-network-line-2" x="1144" dy="38">network</tspan>
+          </text>
+          <path id="s02-lan-link" class="s02-link" pathLength="1" d="M1072 346H1216" />
+          <circle id="s02-laptop-port" class="s02-port" cx="1072" cy="346" r="7" />
+          <circle id="s02-phone-port" class="s02-port" cx="1216" cy="346" r="7" />
+        </g>
+      </svg>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.set("#s02-lan-link", { strokeDasharray: 1 });
+    tl.fromTo("#s02-title",
+      { opacity: 0, x: -28 },
+      { opacity: 1, x: 0, duration: 0.55, ease: "power3.out" },
+      0.35);
+    tl.fromTo("#s02-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.4, ease: "power3.out" },
+      0.7);
+    tl.fromTo("#s02-laptop",
+      { opacity: 0, x: -46 },
+      { opacity: 1, x: 0, duration: 0.7, ease: "power3.out" },
+      0.55);
+    tl.fromTo("#s02-laptop-layers",
+      { opacity: 0.18, filter: "brightness(0.55)" },
+      { opacity: 1, filter: "brightness(1)", duration: 0.6, ease: "power2.inOut" },
+      1.05);
+    tl.fromTo("#s02-lan-link",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut" },
+      1.55);
+    tl.fromTo("#s02-laptop-port, #s02-phone-port, #s02-local-network-label",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.4, stagger: 0.08, ease: "power3.out" },
+      1.75);
+    tl.fromTo("#s02-phone",
+      { opacity: 0, x: 64 },
+      { opacity: 1, x: 0, duration: 0.7, ease: "power3.out" },
+      2.15);
+    tl.fromTo("#s02-phone-label, #s02-phone-count, #s02-phone-model-label, #s02-phone-role",
+      { opacity: 0, filter: "blur(5px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.45, stagger: 0.16, ease: "power3.out" },
+      2.75);
+    tl.fromTo("#s02-phone-layers .s02-layer",
+      { opacity: 0, x: -54, scale: 0.88, transformOrigin: "50% 50%" },
+      { opacity: 1, x: 0, scale: 1, transformOrigin: "50% 50%", duration: 0.6, stagger: 0.5, ease: "power2.inOut" },
+      3.75);
+
+    window.__timelines['s02'] = tl;
+  </script>
+</template>

@@ -1,0 +1,22 @@
+{
+  "brand": "localhost.ai",
+  "source": "Localhost AI Terminal Logo.png",
+  "source_sha256": "bfe8866ff1b8584b39e95489e969cd826daaed62d74fb350a052baf373ef1e0c",
+  "source_dimensions": [
+    2172,
+    724
+  ],
+  "mark_crop": [
+    340,
+    190,
+    665,
+    475
+  ],
+  "lockup_crop": [
+    330,
+    180,
+    1670,
+    490
+  ],
+  "svg": "Lossless PNG crop embedded in SVG; supplied logo was not redrawn"
+}

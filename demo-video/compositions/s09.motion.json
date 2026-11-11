@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s09-title", "bySec": 0.5 },
+    { "kind": "appearsBy", "selector": "#s09-terminal", "bySec": 1.0 },
+    { "kind": "before", "a": "#s09-command", "b": "#s09-pair-key" },
+    { "kind": "before", "a": "#s09-pair-key", "b": "#s09-pair-panel" },
+    { "kind": "before", "a": "#s09-pair-panel", "b": "#s09-demo-qr" },
+    { "kind": "before", "a": "#s09-demo-qr", "b": "#s09-scan-instruction" },
+    { "kind": "staysInFrame", "selector": "#s09-stage" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

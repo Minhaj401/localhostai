@@ -1,0 +1,1 @@
+On the phone, open Server, choose Pairing, and scan that code to connect to the coordinator.

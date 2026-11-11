@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">localhost.ai architecture</title>
+  <desc id="desc">The Rust coordinator serves the terminal and Android chat app, manages the local llama.cpp model, and connects model execution to the phone RPC worker over the LAN. Placement fills the laptop first and uses the phone when more memory is needed.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse">
+      <path d="M0 0 L8 4 L0 8 Z" fill="#5cf26a"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="560" rx="16" fill="#000"/>
+  <g font-family="Outfit, sans-serif">
+    <text x="48" y="58" fill="#a1a1aa" font-size="16" letter-spacing="2">ONE MODEL. YOUR DEVICES.</text>
+    <text x="48" y="105" fill="#fff" font-size="32" font-weight="600">Laptop first. Phone memory when you need it.</text>
+    <rect x="48" y="148" width="460" height="324" rx="16" fill="#181818" stroke="#313131"/>
+    <rect x="692" y="148" width="460" height="324" rx="16" fill="#181818" stroke="#313131"/>
+    <circle cx="78" cy="179" r="5" fill="#5cf26a"/>
+    <text x="96" y="186" fill="#fff" font-size="20" font-weight="600">Laptop</text>
+    <text x="96" y="212" fill="#a1a1aa" font-size="14">Rust coordinator + terminal application</text>
+    <circle cx="722" cy="179" r="5" fill="#5cf26a"/>
+    <text x="740" y="186" fill="#fff" font-size="20" font-weight="600">Android phone</text>
+    <text x="740" y="212" fill="#a1a1aa" font-size="14">Flutter interface + optional compute worker</text>
+    <rect x="72" y="238" width="412" height="84" rx="8" fill="#000" stroke="#313131"/>
+    <rect x="716" y="238" width="412" height="84" rx="8" fill="#000" stroke="#313131"/>
+    <text x="96" y="271" fill="#fff" font-size="18">Embedded node</text>
+    <text x="96" y="298" fill="#a1a1aa" font-size="14">Pairing · model library · planning · chat API</text>
+    <text x="740" y="271" fill="#fff" font-size="18">Chat and model controls</text>
+    <text x="740" y="298" fill="#a1a1aa" font-size="14">Scan · choose models · share compute</text>
+    <rect x="72" y="346" width="412" height="96" rx="8" fill="#000" stroke="#5cf26a"/>
+    <rect x="716" y="346" width="412" height="96" rx="8" fill="#000" stroke="#5cf26a"/>
+    <text x="96" y="380" fill="#5cf26a" font-size="18">Managed llama.cpp</text>
+    <text x="96" y="410" fill="#a1a1aa" font-size="14">Local layers + KV cache in laptop RAM</text>
+    <text x="740" y="380" fill="#5cf26a" font-size="18">Bundled ARM64 RPC worker</text>
+    <text x="740" y="410" fill="#a1a1aa" font-size="14">Remote layers + KV cache in phone RAM</text>
+    <path d="M484 280 H716" stroke="#5cf26a" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <rect x="523" y="252" width="154" height="21" fill="#000"/>
+    <text x="600" y="265" text-anchor="middle" fill="#a1a1aa" font-size="14">Chat API over LAN</text>
+    <path d="M484 394 H716" stroke="#5cf26a" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <rect x="545" y="365" width="110" height="21" fill="#000"/>
+    <text x="600" y="378" text-anchor="middle" fill="#5cf26a" font-size="14">Layer RPC</text>
+    <path d="M278 322 V346" stroke="#a1a1aa" stroke-width="2"/>
+    <path d="M922 322 V346" stroke="#a1a1aa" stroke-width="2"/>
+    <text x="600" y="512" text-anchor="middle" fill="#a1a1aa" font-size="16">Your model library stays on the laptop. Phone sharing is opt-in.</text>
+  </g>
+</svg>

@@ -1,0 +1,12 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s14-title", "bySec": 0.7 },
+    { "kind": "appearsBy", "selector": "#s14-server", "bySec": 1.0 },
+    { "kind": "before", "a": "#s14-load-action", "b": "#s14-loading-state" },
+    { "kind": "before", "a": "#s14-loading-state", "b": "#s14-state-row" },
+    { "kind": "before", "a": "#s14-state-row", "b": "#s14-model-name" },
+    { "kind": "staysInFrame", "selector": "#s14-server" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

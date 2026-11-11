@@ -1,0 +1,125 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position: absolute; inset: 0; }
+    .s03-diagram { font-family: Outfit, sans-serif; }
+    .s03-bezel { fill: #101012; stroke: #FFFFFF; stroke-width: 4; }
+    .s03-screen { fill: #000000; stroke: #A1A1AA; stroke-width: 3; }
+    .s03-detail { fill: none; stroke: #A1A1AA; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .s03-file { fill: #101012; stroke: #FFFFFF; stroke-width: 3; stroke-linejoin: round; }
+    .s03-chip { fill: #101012; stroke: #5CF26A; stroke-width: 4; }
+    .s03-bus { fill: none; stroke: #5CF26A; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+    .s03-port { fill: #000000; stroke: #5CF26A; stroke-width: 4; }
+    .s03-label { fill: #FFFFFF; font-size: 34px; font-weight: 400; }
+    .s03-meta { fill: #A1A1AA; font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 500; }
+    .s03-file-format { fill: #5CF26A; font-size: 56px; font-weight: 500; letter-spacing: -1px; }
+    .s03-planner-title { fill: #FFFFFF; font-size: 38px; font-weight: 500; }
+    .s03-accent { fill: #5CF26A; }
+  </style>
+  <div id="root" data-composition-id="s03" data-width="1920" data-height="1080" data-duration="7.5">
+    <div id="s03-scene" class="scene">
+      <h1 id="s03-title" class="headline" data-var-text="s03-title">The laptop coordinates</h1>
+      <p id="s03-example" class="example-note">Illustrative example</p>
+
+      <svg id="s03-diagram" class="stage s03-diagram" width="1536" height="602" viewBox="0 0 1536 602" role="img" aria-labelledby="s03-diagram-title s03-diagram-description">
+        <title id="s03-diagram-title">The laptop is one coordinating machine</title>
+        <desc id="s03-diagram-description">A large laptop cutaway contains the Qwen 2.5 7B Instruct GGUF file, a placement-planner chip, and the chat endpoint. Routed internal connections join storage to planning and planning to chat inside one continuous screen.</desc>
+
+        <g id="s03-laptop">
+          <rect id="s03-laptop-bezel" class="s03-bezel" x="80" y="12" width="1376" height="516" rx="24" />
+          <circle id="s03-laptop-camera" cx="768" cy="28" r="4" fill="#A1A1AA" />
+          <rect id="s03-laptop-screen" class="s03-screen" x="104" y="44" width="1328" height="460" rx="12" />
+          <path id="s03-screen-header-rule" class="s03-detail" d="M104 120H1432" />
+          <text id="s03-machine-label" class="s03-label" x="140" y="96">localhost.ai · laptop coordinator</text>
+
+          <!-- Routed internal buses adapt the registry flowchart's orthogonal paths. -->
+          <g id="s03-internal-connections">
+            <path id="s03-storage-to-planner" class="s03-bus" pathLength="1" d="M512 292H616Q632 292 632 276V260Q632 244 648 244H752" />
+            <path id="s03-storage-to-planner-arrow" class="s03-bus" pathLength="1" d="M734 232L746 244L734 256" />
+            <path id="s03-planner-to-chat" class="s03-bus" pathLength="1" d="M1192 244H1288Q1304 244 1304 260V418Q1304 434 1288 434H1176" />
+            <path id="s03-planner-to-chat-arrow" class="s03-bus" pathLength="1" d="M1190 422L1178 434L1190 446" />
+          </g>
+
+          <g id="s03-model-storage">
+            <text id="s03-storage-label" class="s03-label" x="160" y="164">Model storage</text>
+            <path id="s03-gguf-file" class="s03-file" d="M160 188H464L512 236V442H160Z" />
+            <path id="s03-gguf-file-fold" class="s03-detail" d="M464 188V236H512" />
+            <text id="s03-gguf-format" class="s03-file-format" x="196" y="278">GGUF</text>
+            <text id="s03-model-name" class="s03-label" x="196" y="338">
+              <tspan id="s03-model-name-line-1" x="196">Qwen 2.5 7B</tspan>
+              <tspan id="s03-model-name-line-2" x="196" dy="42">Instruct</tspan>
+            </text>
+            <text id="s03-storage-location" class="s03-meta" x="160" y="484">Stored on the laptop</text>
+            <circle id="s03-storage-port" class="s03-port" cx="512" cy="292" r="6" />
+          </g>
+
+          <g id="s03-placement-planner">
+            <path id="s03-planner-pins-top" class="s03-detail" d="M808 174V158M864 174V158M920 174V158M976 174V158M1032 174V158M1088 174V158M1144 174V158" />
+            <path id="s03-planner-pins-bottom" class="s03-detail" d="M808 316V332M864 316V332M920 316V332M976 316V332M1032 316V332M1088 316V332M1144 316V332" />
+            <path id="s03-planner-pins-sides" class="s03-detail" d="M752 204H736M752 282H736M1192 204H1208M1192 282H1208" />
+            <rect id="s03-planner-chip" class="s03-chip" x="752" y="174" width="440" height="142" rx="8" />
+            <text id="s03-planner-label" class="s03-planner-title" x="972" y="238" text-anchor="middle">Placement planner</text>
+            <text id="s03-planner-policy" class="s03-meta" x="972" y="284" text-anchor="middle">Laptop first</text>
+            <circle id="s03-planner-input" class="s03-port" cx="752" cy="244" r="6" />
+            <circle id="s03-planner-output" class="s03-port" cx="1192" cy="244" r="6" />
+          </g>
+
+          <!-- The endpoint is printed on the shared machine surface, not a card. -->
+          <g id="s03-chat-endpoint">
+            <text id="s03-chat-label" class="s03-label" x="752" y="406">Chat endpoint</text>
+            <text id="s03-chat-route" class="s03-meta s03-accent" x="752" y="458">/v1/chat/completions</text>
+            <path id="s03-chat-socket" class="s03-detail" d="M1152 406V462" />
+            <circle id="s03-chat-input" class="s03-port" cx="1152" cy="434" r="6" />
+            <path id="s03-chat-input-link" class="s03-bus" pathLength="1" d="M1176 434H1160" />
+          </g>
+
+          <path id="s03-laptop-base" class="s03-bezel" stroke-linejoin="round" d="M80 528H1456L1520 556V560Q1520 576 1496 576H40Q16 576 16 560V556Z" />
+          <path id="s03-laptop-base-notch" class="s03-detail" d="M640 529L658 547H878L896 529" />
+        </g>
+      </svg>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.set("#s03-storage-to-planner, #s03-storage-to-planner-arrow, #s03-planner-to-chat, #s03-planner-to-chat-arrow, #s03-chat-input-link", { strokeDasharray: 1 });
+    tl.fromTo("#s03-title",
+      { opacity: 0, y: -22 },
+      { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" },
+      0.35);
+    tl.fromTo("#s03-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.4, ease: "power3.out" },
+      0.7);
+    tl.fromTo("#s03-laptop-bezel, #s03-laptop-camera, #s03-laptop-screen, #s03-screen-header-rule, #s03-machine-label, #s03-laptop-base, #s03-laptop-base-notch",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.55, stagger: 0.035, ease: "power3.out" },
+      0.5);
+    tl.fromTo("#s03-model-storage",
+      { opacity: 0, x: -42, filter: "blur(5px)" },
+      { opacity: 1, x: 0, filter: "blur(0px)", duration: 0.65, ease: "power3.out" },
+      0.9);
+    tl.fromTo("#s03-storage-to-planner, #s03-storage-to-planner-arrow",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.8, stagger: 0.08, ease: "power2.inOut" },
+      1.85);
+    tl.fromTo("#s03-placement-planner",
+      { opacity: 0, y: -28, scale: 0.97, transformOrigin: "50% 50%" },
+      { opacity: 1, y: 0, scale: 1, transformOrigin: "50% 50%", duration: 0.7, ease: "power3.out" },
+      2.55);
+    tl.fromTo("#s03-planner-to-chat, #s03-planner-to-chat-arrow",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.8, stagger: 0.08, ease: "power2.inOut" },
+      3.45);
+    tl.fromTo("#s03-chat-endpoint",
+      { opacity: 0, x: 34, filter: "blur(5px)" },
+      { opacity: 1, x: 0, filter: "blur(0px)", duration: 0.65, ease: "power3.out" },
+      4.25);
+    tl.fromTo("#s03-chat-input-link",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.45, ease: "power2.inOut" },
+      4.9);
+
+    window.__timelines['s03'] = tl;
+  </script>
+</template>

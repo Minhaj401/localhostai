@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s10-title", "bySec": 0.5 },
+    { "kind": "appearsBy", "selector": "#s10-pairing", "bySec": 1.0 },
+    { "kind": "before", "a": "#s10-qr-frame", "b": "#s10-connection" },
+    { "kind": "before", "a": "#s10-connection", "b": "#s10-server" },
+    { "kind": "before", "a": "#s10-server", "b": "#s10-online-status" },
+    { "kind": "before", "a": "#s10-online-status", "b": "#s10-choose-model" },
+    { "kind": "staysInFrame", "selector": "#s10-server" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

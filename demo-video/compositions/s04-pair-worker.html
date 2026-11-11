@@ -1,0 +1,158 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position:absolute; inset:0; }
+
+    .s04-laptop { position:absolute; left:0; top:100px; width:860px; height:478px; }
+    .s04-laptop-shell { position:absolute; inset:0; width:860px; height:478px; }
+    .s04-laptop-label { position:absolute; left:84px; top:42px; }
+    .s04-pair-step { position:absolute; left:84px; top:108px; font-size:44px; font-weight:500; line-height:1.15; }
+    .s04-paired-state { position:absolute; left:86px; top:192px; font-size:40px; }
+    .s04-pair-note { position:absolute; left:84px; top:270px; width:620px; }
+
+    .s04-lan-route { position:absolute; inset:0; width:1536px; height:602px; }
+    .s04-lan-label { position:absolute; left:858px; top:352px; width:260px; text-align:center; }
+
+    .s04-phone { position:absolute; left:1136px; top:8px; width:388px; height:594px; }
+    .s04-phone-shell { position:absolute; inset:0; width:388px; height:594px; }
+    .s04-phone-label { position:absolute; left:38px; top:58px; }
+    .s04-share-step { position:absolute; left:38px; top:110px; font-size:36px; font-weight:500; line-height:1.15; }
+    .s04-share-label { position:absolute; left:38px; top:170px; font-size:32px; line-height:1.2; }
+    .s04-share-control { position:absolute; left:38px; top:218px; display:flex; align-items:center; gap:24px; }
+    .s04-switch { display:flex; align-items:center; justify-content:flex-end; width:98px; height:52px; padding:6px; border:2px solid #5CF26A; border-radius:999px; background:#5CF26A; }
+    .s04-switch-thumb { display:block; width:36px; height:36px; border-radius:50%; background:#000000; }
+    .s04-start-route { position:absolute; left:0; top:0; width:388px; height:594px; }
+    .s04-start-label { position:absolute; left:216px; top:291px; }
+
+    .s04-worker { position:absolute; left:20px; top:332px; width:348px; height:206px; }
+    .s04-worker-shell { position:absolute; inset:0; width:348px; height:206px; }
+    .s04-worker-title { position:absolute; left:36px; top:38px; font-size:34px; font-weight:500; line-height:1.2; }
+    .s04-worker-kind { position:absolute; left:36px; top:87px; }
+    .s04-worker-state { position:absolute; left:36px; top:138px; }
+  </style>
+  <div id="root" data-composition-id="s04" data-width="1920" data-height="1080" data-duration="7.5">
+    <div id="s04-scene" class="scene">
+      <h1 id="s04-title" class="headline" data-var-text="s04-title">Pair, then share</h1>
+      <p id="s04-example" class="example-note">Illustrative example</p>
+
+      <div id="s04-stage" class="stage">
+        <!-- Device screen slots and routed connectors adapted from the registry references. -->
+        <div id="s04-laptop" class="s04-laptop">
+          <svg id="s04-laptop-shell" class="s04-laptop-shell" viewBox="0 0 860 478" aria-hidden="true">
+            <rect x="44" y="2" width="772" height="408" rx="20" fill="#0A0A0B" stroke="#A1A1AA" stroke-width="4" />
+            <rect x="62" y="22" width="736" height="362" rx="10" fill="#101012" stroke="#2E2E35" stroke-width="3" />
+            <circle cx="430" cy="12" r="3" fill="#A1A1AA" />
+            <path d="M44 410H816L858 454L835 474H25L2 454Z" fill="#0A0A0B" stroke="#A1A1AA" stroke-width="4" stroke-linejoin="round" />
+            <path d="M348 412H512L526 434H334Z" fill="#16161A" stroke="#2E2E35" stroke-width="3" stroke-linejoin="round" />
+          </svg>
+          <p id="s04-laptop-label" class="mono muted s04-laptop-label">Laptop coordinator</p>
+          <h2 id="s04-pair-step" class="s04-pair-step"><span class="accent">1</span> &nbsp;Pair over LAN</h2>
+          <div id="s04-paired-state" class="status s04-paired-state">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>Paired</span>
+          </div>
+          <p id="s04-pair-note" class="body-copy s04-pair-note">Pairing alone does not share compute.</p>
+        </div>
+
+        <svg id="s04-lan-route" class="s04-lan-route" viewBox="0 0 1536 602" aria-hidden="true">
+          <path id="s04-pair-link" class="line-accent" pathLength="1" d="M816 328H950V86H1138" />
+        </svg>
+        <p id="s04-lan-label" class="mono muted s04-lan-label">Same LAN</p>
+
+        <div id="s04-phone" class="s04-phone">
+          <svg id="s04-phone-shell" class="s04-phone-shell" viewBox="0 0 388 594" aria-hidden="true">
+            <rect x="2" y="2" width="380" height="590" rx="36" fill="#0A0A0B" stroke="#A1A1AA" stroke-width="4" />
+            <rect x="20" y="34" width="344" height="522" rx="22" fill="#000000" stroke="#2E2E35" stroke-width="3" />
+            <circle cx="192" cy="19" r="5" fill="#A1A1AA" />
+            <path d="M386 118V188M386 218V260" stroke="#A1A1AA" stroke-width="4" stroke-linecap="round" />
+            <path d="M150 575H234" stroke="#A1A1AA" stroke-width="4" stroke-linecap="round" />
+          </svg>
+          <p id="s04-phone-label" class="mono muted s04-phone-label">Phone</p>
+          <h2 id="s04-share-step" class="s04-share-step"><span class="accent">2</span> &nbsp;Enable sharing</h2>
+          <p id="s04-share-label" class="s04-share-label">Share this phone</p>
+          <div id="s04-share-control" class="s04-share-control" aria-label="Share this phone switched on">
+            <span id="s04-share-switch" class="s04-switch" aria-hidden="true">
+              <span id="s04-share-thumb" class="s04-switch-thumb"></span>
+            </span>
+            <span id="s04-share-state" class="mono accent">On</span>
+          </div>
+          <svg id="s04-start-route" class="s04-start-route" viewBox="0 0 388 594" aria-hidden="true">
+            <path id="s04-worker-start-link" class="line-accent" pathLength="1" d="M87 272V304H194V348" />
+            <path id="s04-worker-start-arrow" class="line-accent" pathLength="1" d="M184 338L194 348L204 338" />
+          </svg>
+          <p id="s04-start-label" class="mono muted s04-start-label">starts</p>
+
+          <!-- The active area is a physical worker/CPU cutaway, not a second app screen. -->
+          <div id="s04-worker" class="s04-worker">
+            <svg id="s04-worker-shell" class="s04-worker-shell" viewBox="0 0 348 206" aria-hidden="true">
+              <path d="M70 2V20M122 2V20M226 2V20M278 2V20M70 186V204M122 186V204M174 186V204M226 186V204M278 186V204M2 58H20M2 104H20M2 150H20M328 58H346M328 104H346M328 150H346" class="line-accent" />
+              <rect x="20" y="20" width="308" height="166" rx="8" fill="#101012" stroke="#5CF26A" stroke-width="4" />
+            </svg>
+            <h3 id="s04-worker-title" class="s04-worker-title">Bundled worker</h3>
+            <p id="s04-worker-kind" class="mono muted s04-worker-kind">CPU · RPC</p>
+            <div id="s04-worker-state" class="status s04-worker-state">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span>Running</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.set("#s04-pair-link, #s04-worker-start-link, #s04-worker-start-arrow", { strokeDasharray: 1 });
+    tl.set("#s04-share-thumb", { x: -46 });
+    tl.fromTo("#s04-title",
+      { opacity: 0, scale: 0.97, transformOrigin: "0% 50%" },
+      { opacity: 1, scale: 1, transformOrigin: "0% 50%", duration: 0.55, ease: "power3.out" },
+      0.35);
+    tl.fromTo("#s04-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.4, ease: "power3.out" },
+      0.7);
+    tl.fromTo("#s04-laptop",
+      { opacity: 0, x: -46 },
+      { opacity: 1, x: 0, duration: 0.7, ease: "power3.out" },
+      0.55);
+    tl.fromTo("#s04-paired-state, #s04-pair-note",
+      { opacity: 0, filter: "blur(5px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.45, stagger: 0.16, ease: "power3.out" },
+      1.05);
+    tl.fromTo("#s04-pair-link",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut" },
+      1.55);
+    tl.fromTo("#s04-lan-label",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.4, ease: "power3.out" },
+      1.9);
+    tl.fromTo("#s04-phone",
+      { opacity: 0, x: 64 },
+      { opacity: 1, x: 0, duration: 0.7, ease: "power3.out" },
+      2.2);
+    tl.fromTo("#s04-share-state",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.35, ease: "power3.out" },
+      3.45);
+    tl.fromTo("#s04-share-thumb",
+      { x: -46 },
+      { x: 0, duration: 0.5, ease: "power2.inOut" },
+      3.35);
+    tl.fromTo("#s04-worker-start-link, #s04-worker-start-arrow",
+      { strokeDashoffset: 1 },
+      { strokeDashoffset: 0, duration: 0.7, stagger: 0.08, ease: "power2.inOut" },
+      3.95);
+    tl.fromTo("#s04-start-label",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.35, ease: "power3.out" },
+      4.2);
+    tl.fromTo("#s04-worker",
+      { opacity: 0, scale: 0.94, filter: "blur(6px)", transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "50% 50%", duration: 0.7, ease: "power3.out" },
+      4.65);
+
+    window.__timelines['s04'] = tl;
+  </script>
+</template>

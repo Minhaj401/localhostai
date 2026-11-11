@@ -51,5 +51,9 @@ fn real_pairing_uri_is_small_enough_to_scan() {
     let uri = p.uri();
     assert!(uri.len() < 160, "pairing URI grew to {} chars", uri.len());
     let grid = encode(&uri).expect("encode");
-    assert!(grid.len() <= 45, "QR grew to version with {} modules", grid.len());
+    assert!(
+        grid.len() <= 45,
+        "QR grew to version with {} modules",
+        grid.len()
+    );
 }

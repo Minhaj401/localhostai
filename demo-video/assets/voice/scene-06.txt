@@ -1,0 +1,1 @@
+It fills the laptop first, then sends only the remaining layers to the phone.

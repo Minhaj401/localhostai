@@ -17,6 +17,9 @@ pub struct Hardware {
     pub kind: String,
     /// Total physical memory.
     pub ram_mb: u64,
+    /// Memory currently available without swapping. This caps the safe shared
+    /// budget used by the planner.
+    pub available_mb: u64,
     /// Memory we are willing to lend to a model, after OS + app overhead.
     pub budget_mb: u64,
     /// Logical CPUs.
@@ -33,9 +36,9 @@ impl Hardware {
     /// Overhead to leave free so we never swap: OS, browser, IDE.
     pub fn default_reserve_mb(kind: &str) -> u64 {
         match kind {
-            "phone" => 900,   // Android itself + the app
+            "phone" => 900, // Android itself + the app
             "desktop" => 2048,
-            _ => 1400,        // laptop: desktop env is heavier
+            _ => 1400, // laptop: desktop env is heavier
         }
     }
 
@@ -53,15 +56,36 @@ impl Hardware {
         by_ram.min(cores.max(1))
     }
 
+    /// Safe upper bound for a new model allocation. Busy devices advertise
+    /// less memory instead of promising RAM already in use by other apps.
+    pub fn share_budget_mb(kind: &str, ram_mb: u64, available_mb: u64) -> u64 {
+        let reserve = Self::default_reserve_mb(kind);
+        ram_mb
+            .saturating_sub(reserve)
+            .min(available_mb.min(ram_mb).saturating_sub(reserve))
+    }
+
     /// Build from raw numbers, applying reserve + thread tiering.
     pub fn from_raw(id: &str, name: &str, kind: &str, ram_mb: u64, cores: u32, arch: &str) -> Self {
-        let reserve = Self::default_reserve_mb(kind);
-        let budget = ram_mb.saturating_sub(reserve);
+        Self::from_raw_available(id, name, kind, ram_mb, ram_mb, cores, arch)
+    }
+
+    pub fn from_raw_available(
+        id: &str,
+        name: &str,
+        kind: &str,
+        ram_mb: u64,
+        available_mb: u64,
+        cores: u32,
+        arch: &str,
+    ) -> Self {
+        let budget = Self::share_budget_mb(kind, ram_mb, available_mb);
         Self {
             id: id.to_string(),
             name: name.to_string(),
             kind: kind.to_string(),
             ram_mb,
+            available_mb: available_mb.min(ram_mb),
             budget_mb: budget,
             cores,
             threads: Self::tier_threads(ram_mb, cores),
@@ -76,11 +100,15 @@ impl Hardware {
     pub fn probe_self(name: &str) -> Hardware {
         probe_self(name)
     }
+
+    pub fn current_available_mb() -> Option<u64> {
+        read_meminfo_mb().map(|(_, available)| available)
+    }
 }
 
 /// Probe this machine. Linux is the target; other platforms get sane fallbacks.
 pub fn probe_self(name: &str) -> Hardware {
-    let ram_mb = read_meminfo_mb().unwrap_or(4096);
+    let (ram_mb, available_mb) = read_meminfo_mb().unwrap_or((4096, 4096));
     let cores = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4);
@@ -92,19 +120,30 @@ pub fn probe_self(name: &str) -> Hardware {
         "desktop"
     };
     let id = read_hostname().unwrap_or_else(|| "local".into());
-    Hardware::from_raw(&id, name, kind, ram_mb, cores, std::env::consts::ARCH)
+    Hardware::from_raw_available(
+        &id,
+        name,
+        kind,
+        ram_mb,
+        available_mb,
+        cores,
+        std::env::consts::ARCH,
+    )
 }
 
-fn read_meminfo_mb() -> Option<u64> {
+fn read_meminfo_mb() -> Option<(u64, u64)> {
     let txt = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let kb: u64 = txt
-        .lines()
-        .find(|l| l.starts_with("MemTotal:"))?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()?;
-    Some(kb / 1024)
+    let value = |key: &str| -> Option<u64> {
+        txt.lines()
+            .find(|line| line.starts_with(key))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()
+    };
+    let total = value("MemTotal:")? / 1024;
+    let available = value("MemAvailable:").unwrap_or(total * 1024) / 1024;
+    Some((total, available.min(total)))
 }
 
 fn read_hostname() -> Option<String> {
@@ -138,8 +177,16 @@ mod tests {
     fn reserve_is_subtracted() {
         let h = Hardware::from_raw("id", "phone", "phone", 8000, 8, "arm64");
         assert_eq!(h.ram_mb, 8000);
+        assert_eq!(h.available_mb, 8000);
         assert_eq!(h.budget_mb, 8000 - 900);
         assert!(h.can_host_layers);
+    }
+
+    #[test]
+    fn available_memory_is_reported_separately_from_the_share_cap() {
+        let h = Hardware::from_raw_available("id", "phone", "phone", 8000, 2300, 8, "arm64");
+        assert_eq!(h.available_mb, 2300);
+        assert_eq!(h.budget_mb, 1400);
     }
 
     #[test]

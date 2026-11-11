@@ -1,0 +1,14 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s08-title", "bySec": 0.75 },
+    { "kind": "appearsBy", "selector": "#s08-laptop-frame", "bySec": 1.3 },
+    { "kind": "before", "a": "#s08-laptop-frame", "b": "#s08-laptop-layers" },
+    { "kind": "before", "a": "#s08-laptop-layers", "b": "#s08-phone-layers" },
+    { "kind": "before", "a": "#s08-phone-layers", "b": "#s08-lan-path" },
+    { "kind": "before", "a": "#s08-lan-path", "b": "#s08-data-label" },
+    { "kind": "before", "a": "#s08-data-label", "b": "#s08-intermediate-data" },
+    { "kind": "staysInFrame", "selector": "#s08-stage" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

@@ -1,0 +1,6 @@
+.media/*.lock
+node_modules/
+renders/
+.hyperframes/
+boards/technical-proof/
+boards/stills/redo/

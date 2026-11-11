@@ -1,0 +1,239 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position: absolute; inset: 0; }
+
+    .s07-laptop {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 974px;
+      height: 598px;
+    }
+
+    .s07-device-frame {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .s07-laptop-labels {
+      position: absolute;
+      left: 90px;
+      top: 92px;
+      width: 200px;
+    }
+
+    .s07-device-name {
+      font: 500 38px/1.1 Outfit, sans-serif;
+      color: #FFFFFF;
+    }
+
+    .s07-count {
+      display: block;
+      margin-top: 24px;
+      font: 500 144px/1 Outfit, sans-serif;
+      letter-spacing: -4px;
+      color: var(--color-accent, #5CF26A);
+    }
+
+    .s07-count-unit {
+      display: block;
+      margin-top: 8px;
+      font: 400 34px/1.2 Outfit, sans-serif;
+      color: #A1A1AA;
+    }
+
+    .s07-laptop-layers {
+      position: absolute;
+      left: 330px;
+      top: 102px;
+      display: grid;
+      grid-template-columns: repeat(5, 100px);
+      grid-template-rows: repeat(5, 66px);
+      gap: 14px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .s07-layer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100px;
+      height: 66px;
+      border: 2px solid #8BFF95;
+      border-radius: 5px;
+      background: var(--color-accent, #5CF26A);
+      color: #000000;
+      font: 500 30px/1 'JetBrains Mono', monospace;
+    }
+
+    .s07-plus {
+      position: absolute;
+      left: 1022px;
+      top: 244px;
+      width: 120px;
+      text-align: center;
+      font: 400 96px/1 Outfit, sans-serif;
+      color: #A1A1AA;
+    }
+
+    .s07-phone {
+      position: absolute;
+      left: 1212px;
+      top: 0;
+      width: 312px;
+      height: 598px;
+    }
+
+    .s07-phone-labels {
+      position: absolute;
+      left: 34px;
+      right: 34px;
+      top: 74px;
+      text-align: center;
+    }
+
+    .s07-phone-count {
+      margin-top: 14px;
+      font-size: 132px;
+    }
+
+    .s07-phone-unit { margin-top: 6px; }
+
+    .s07-phone-layers {
+      position: absolute;
+      left: 106px;
+      top: 328px;
+      display: grid;
+      grid-template-columns: 100px;
+      grid-template-rows: repeat(3, 66px);
+      gap: 14px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+  </style>
+
+  <div id="root" data-composition-id="s07" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 class="headline" id="s07-title" data-var-text="s07-title">Example: 28 layers</h1>
+      <p class="example-note" id="s07-example" data-var-text="s07-example">Illustrative example</p>
+
+      <!-- Registry device-slot staging, with physical bezels and an attached laptop base. -->
+      <div class="stage" id="s07-stage" aria-label="One illustrative 28-layer model: 25 layers on the laptop and 3 on the phone.">
+        <section class="s07-laptop" id="s07-laptop" aria-labelledby="s07-laptop-name s07-laptop-count">
+          <svg class="s07-device-frame" id="s07-laptop-frame" viewBox="0 0 974 598" width="974" height="598" aria-hidden="true">
+            <rect x="34" y="28" width="910" height="518" rx="22" fill="#101012" stroke="#A1A1AA" stroke-width="4"/>
+            <rect x="54" y="48" width="870" height="478" rx="6" fill="#0A0A0B" stroke="#2E2E35" stroke-width="3"/>
+            <circle cx="489" cy="38" r="3" fill="#A1A1AA"/>
+            <path d="M4 546 H970 L952 582 Q948 592 936 592 H38 Q26 592 22 582 Z" fill="#101012" stroke="#A1A1AA" stroke-width="4" stroke-linejoin="round"/>
+            <path d="M402 546 H572 L564 561 H410 Z" fill="#16161A" stroke="#2E2E35" stroke-width="3" stroke-linejoin="round"/>
+          </svg>
+
+          <div class="s07-laptop-labels" id="s07-laptop-labels">
+            <h2 class="s07-device-name" id="s07-laptop-name">Laptop</h2>
+            <p id="s07-laptop-count"><span class="s07-count">25</span><span class="s07-count-unit">layers</span></p>
+          </div>
+
+          <!-- All 25 blocks are individually authored and use the same size as the phone's three. -->
+          <ol class="s07-laptop-layers" id="s07-laptop-layers" aria-label="Laptop layers 1 through 25">
+            <li class="s07-layer" id="s07-layer-01">01</li>
+            <li class="s07-layer" id="s07-layer-02">02</li>
+            <li class="s07-layer" id="s07-layer-03">03</li>
+            <li class="s07-layer" id="s07-layer-04">04</li>
+            <li class="s07-layer" id="s07-layer-05">05</li>
+            <li class="s07-layer" id="s07-layer-06">06</li>
+            <li class="s07-layer" id="s07-layer-07">07</li>
+            <li class="s07-layer" id="s07-layer-08">08</li>
+            <li class="s07-layer" id="s07-layer-09">09</li>
+            <li class="s07-layer" id="s07-layer-10">10</li>
+            <li class="s07-layer" id="s07-layer-11">11</li>
+            <li class="s07-layer" id="s07-layer-12">12</li>
+            <li class="s07-layer" id="s07-layer-13">13</li>
+            <li class="s07-layer" id="s07-layer-14">14</li>
+            <li class="s07-layer" id="s07-layer-15">15</li>
+            <li class="s07-layer" id="s07-layer-16">16</li>
+            <li class="s07-layer" id="s07-layer-17">17</li>
+            <li class="s07-layer" id="s07-layer-18">18</li>
+            <li class="s07-layer" id="s07-layer-19">19</li>
+            <li class="s07-layer" id="s07-layer-20">20</li>
+            <li class="s07-layer" id="s07-layer-21">21</li>
+            <li class="s07-layer" id="s07-layer-22">22</li>
+            <li class="s07-layer" id="s07-layer-23">23</li>
+            <li class="s07-layer" id="s07-layer-24">24</li>
+            <li class="s07-layer" id="s07-layer-25">25</li>
+          </ol>
+        </section>
+
+        <p class="s07-plus" id="s07-plus" aria-hidden="true">+</p>
+
+        <section class="s07-phone" id="s07-phone" aria-labelledby="s07-phone-name s07-phone-count">
+          <svg class="s07-device-frame" id="s07-phone-frame" viewBox="0 0 312 598" width="312" height="598" aria-hidden="true">
+            <rect x="4" y="4" width="304" height="590" rx="48" fill="#101012" stroke="#A1A1AA" stroke-width="4"/>
+            <rect x="20" y="22" width="272" height="554" rx="34" fill="#0A0A0B" stroke="#2E2E35" stroke-width="3"/>
+            <circle cx="156" cy="40" r="7" fill="#2E2E35"/>
+            <rect x="122" y="566" width="68" height="6" rx="3" fill="#A1A1AA"/>
+          </svg>
+
+          <div class="s07-phone-labels" id="s07-phone-labels">
+            <h2 class="s07-device-name" id="s07-phone-name">Phone</h2>
+            <p id="s07-phone-count"><span class="s07-count s07-phone-count">3</span><span class="s07-count-unit s07-phone-unit">layers</span></p>
+          </div>
+
+          <ol class="s07-phone-layers" id="s07-phone-layers" start="26" aria-label="Phone layers 26 through 28">
+            <li class="s07-layer" id="s07-layer-26">26</li>
+            <li class="s07-layer" id="s07-layer-27">27</li>
+            <li class="s07-layer" id="s07-layer-28">28</li>
+          </ol>
+        </section>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s07-title",
+      { opacity: 0, filter: "blur(9px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.5, ease: "power3.out" },
+      0.25);
+    tl.fromTo("#s07-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.35, ease: "power3.out" },
+      0.62);
+    tl.fromTo("#s07-laptop-frame, #s07-laptop-name",
+      { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.55, stagger: 0.1, ease: "power3.out" },
+      0.7);
+    tl.fromTo("#s07-laptop-count",
+      { opacity: 0, scale: 0.72, filter: "blur(8px)", transformOrigin: "30% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "30% 50%", duration: 0.7, ease: "power3.out" },
+      1.05);
+    tl.fromTo("#s07-laptop-layers .s07-layer",
+      { opacity: 0, scale: 0.72, transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, transformOrigin: "50% 50%", duration: 0.5, stagger: 0.055, ease: "power2.inOut" },
+      1.65);
+    tl.fromTo("#s07-plus",
+      { opacity: 0, scale: 0.5, filter: "blur(8px)", transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "50% 50%", duration: 0.55, ease: "power3.out" },
+      3.5);
+    tl.fromTo("#s07-phone-frame, #s07-phone-name",
+      { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.55, stagger: 0.1, ease: "power3.out" },
+      3.9);
+    tl.fromTo("#s07-phone-count",
+      { opacity: 0, scale: 0.7, filter: "blur(8px)", transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, filter: "blur(0px)", transformOrigin: "50% 50%", duration: 0.65, ease: "power3.out" },
+      4.25);
+    tl.fromTo("#s07-phone-layers .s07-layer",
+      { opacity: 0, x: -44, filter: "blur(7px)" },
+      { opacity: 1, x: 0, filter: "blur(0px)", duration: 0.55, stagger: 0.18, ease: "power3.out" },
+      4.8);
+
+    window.__timelines['s07'] = tl;
+  </script>
+</template>

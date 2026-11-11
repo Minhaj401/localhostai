@@ -22,24 +22,25 @@ elif [ "$TOTAL_MB" -ge 8000 ];  then TIER=high;  THREADS=4
 elif [ "$TOTAL_MB" -ge 4000 ];  then TIER=mid;   THREADS=3
 else                                 TIER=low;   THREADS=2
 fi
+[ "$THREADS" -le "$CORES" ] || THREADS=$CORES
 echo "[phone-rpc] tier=$TIER ram=${TOTAL_MB}MB (free ${AVAIL_MB}MB) cores=$CORES threads=$THREADS"
 
 case "${1:-run}" in
   build)
     pkg install -y git cmake clang make
-    [ -d $LLAMA_DIR ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp
-    cd $LLAMA_DIR
+    [ -d "$LLAMA_DIR" ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"
+    cd "$LLAMA_DIR"
     cmake -B build-termux -DGGML_RPC=ON -DGGML_NATIVE=ON \
           -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-termux --target rpc-server -j"$THREADS"
-    echo "[phone-rpc] build complete: $LLAMA_DIR/build-termux/bin/rpc-server"
+    cmake --build build-termux --target ggml-rpc-server -j"$THREADS"
+    echo "[phone-rpc] build complete: $LLAMA_DIR/build-termux/bin/ggml-rpc-server"
     ;;
   run)
     RPC=$LLAMA_DIR/build-termux/bin/ggml-rpc-server
     [ -x "$RPC" ] || { echo "run 'bash setup-termux.sh build' first"; exit 1; }
     IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
     echo "[phone-rpc] RPC server on $IP:$PORT  (tell the laptop this address)"
-    exec "$RPC" --host 0.0.0.0 --port "$PORT" -t "$THREADS"
+    exec "$RPC" --host 0.0.0.0 --port "$PORT" -t "$THREADS" --device CPU
     ;;
   *)
     echo "usage: bash setup-termux.sh [build|run]"

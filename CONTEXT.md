@@ -268,3 +268,194 @@ Release binary: **5.4 MB**, `target/release/privateml`.
    supplies them; reading GGUF metadata (n_layer) would make plans exact.
 4. Still to delete: `laptop-node/`, `phone-rpc/`, `scripts/setup-distributed.sh`.
 5. Release hygiene: tag, checksums, licence, install one-liner.
+
+---
+
+# Productization — phase 3 (self-contained TUI)
+
+The normal product path no longer requires Ollama or a manually started
+llama-server. The TUI exposes a pinned model catalog; selecting an uninstalled
+model downloads a checksummed llama.cpp `b12110` runtime and a checksummed,
+resumable GGUF, registers it, plans the split, and starts inference. Managed
+runtime/model state is exposed through `GET /managed` and
+`POST /managed/install`.
+
+Built-in choices include Qwen 2.5 Instruct at 0.5B, 1.5B, 3B, and 7B, plus
+Qwen 2.5 Coder 7B. The larger general model uses the official single-file
+Q3_K_M build; Coder uses Q4_K_M. The 1.5B model remains the default
+recommendation. The ARM64 APK worker is built from the same llama.cpp revision
+to keep the RPC protocol aligned.
+
+Resource sharing is explicit on both sides. The Android **Share this phone**
+switch starts/stops the worker. The TUI **Ctrl+D** panel can independently
+include or exclude each device with Space; that choice survives heartbeats for
+the node session. It reports free/total RAM, share cap, cores/threads,
+reachability, heartbeat age, RPC address, and active layer/memory allocation.
+
+---
+
+# Reliability pass — 0.2.1
+
+Current release versions: Rust `0.2.2`, localhost.ai Android `0.2.2+7`. See
+`PROJECT_GUIDE.md` for the current architecture; earlier phase roadmaps above
+describe historical states.
+
+- GGUF v2/v3 metadata now supplies real transformer counts and attention-based
+  KV estimates. Memory placement remains approximate. Replacement plans account
+  for the old run's releasable allocation, and extra prompt-cache RAM is disabled.
+- Idle workers must complete a matching RPC 8.0.x HELLO/device-count preflight.
+  Do not repeatedly connect to an active worker's single-client socket: use its
+  owning cluster state and the API's `in_use` flag. Failed runs clear readiness.
+- Managed downloads validate resume ranges and use an installation lock.
+  Installed catalog models are SHA-256 checked before use; successful checks are
+  cached by size/mtime. Phone heartbeats cannot re-register a stopped worker.
+- A stream must finish explicitly; bare EOF is an interrupted reply. Interrupted
+  single-shot CLI commands also return failure exit codes.
+- SIGTERM/SIGHUP clean up the owned engine. Linux also uses a parent-death guard
+  so SIGKILL or a crashed node cannot leave native model RAM/ports allocated.
+- Each load has a separate `cluster-<pid>-<run>.log`, referenced by `/cluster`
+  and failure messages.
+- Split planning is coordinator-first: fill the laptop's safe budget, then spill
+  only the whole-layer remainder to remote workers in descending budget order.
+  A fitting local model leaves phones idle, reducing Wi-Fi traffic and avoiding
+  unnecessary Android RPC memory pressure.
+- Remote assignments preserve 256 MiB for native RPC overhead. The Android
+  worker reports memory again after startup, uses its private weight cache, and
+  retains its last valid LAN address across transient lookup failures. Explicit
+  withdrawal or fatal RPC load output now fails the cluster promptly.
+
+`scripts/check-runtime.py` exercises the compiled CLI and terminal. With an
+existing GGUF, `scripts/check-inference.py` verifies native CPU/RPC inference,
+actual placement, reloads, worker loss/recovery, and termination cleanup. RPC
+workers in these tests run on loopback; Android hardware testing is separate.
+
+---
+
+# Android UI pass — 0.2.1+4
+
+- Added a shared branded Material 3 design system with adaptive content widths,
+  responsive actions, semantic status pills, notices, and light/dark themes.
+- Reworked Home into a connection/compute dashboard; pairing now has explicit
+  scan/manual modes, scanner lifecycle protection, validation, and secure token
+  entry.
+- Chat uses lazy message rendering, accessible speaker roles, intentional
+  auto-follow, jump-to-latest, and stop-generation controls. Pool refreshes run
+  in parallel and preserve the last snapshot when the laptop is offline.
+- Node switching no longer stops a worker when reselecting the active laptop;
+  changing to another node or advanced URL safely withdraws phone sharing.
+- Flutter build `0.2.1+4` passes analysis and 36 tests, including real 320 px
+  layout constraints, large text, semantic labels, and long device/model data.
+
+## Canonical design application — 0.2.1+5
+
+- `app/design.md` is now implemented as the product UI contract: cream canvas,
+  ink primary, neutral text ladder, hairline sections, 4px controls, flat depth,
+  and bracketed ASCII markers throughout all six screens.
+- Bundled JetBrains Mono 400/500/700 at pinned upstream commit `1937130` as the
+  licensed Berkeley Mono substitute; the OFL text ships with the app assets.
+- Removed decorative gradients, shadows, rounded card islands, raster in-app
+  branding, and Material icon glyphs. The chat empty state is the one reserved
+  near-black TUI-style surface.
+- Android launch/window chrome and web metadata use the same cream/ink tokens.
+  Flutter analysis and 38 tests cover exact theme tokens, the 640px action
+  breakpoint, 320px large-text layout, semantics, and long pool content.
+
+---
+
+# TUI usability pass — 0.2.1
+
+- Uninstalled catalog models can be planned without registration or download;
+  `/cluster/start` still requires an installed, inspected, integrity-checked
+  GGUF and repeats planning with current RAM.
+- The model picker previews fit, shortfall, laptop-first assignments, estimated
+  memory, and selectable 1K–16K context. `I` installs without loading.
+- Added F1 help, Ctrl+A activity/progress/diagnostics, Ctrl+X stop/unload,
+  bracketed paste, Unicode-safe cursor editing, word deletion, and PageUp/
+  PageDown chat scrolling with pause/resume auto-follow.
+- Async preview, model-operation, and chat-generation IDs prevent stale results
+  from overwriting newer state. Ratatui and PTY tests cover these controls.
+
+---
+
+# localhost.ai Flutter rebrand — 0.2.1+6
+
+- Active spec: `app/DESIGN_FLUTTER.md`. The cream/ASCII visual source is archived
+  as `app/design_opencode_reference.md`.
+- Pure black/green UI, bundled Outfit and JetBrains Mono, Lucide icons,
+  terminal windows, low-alpha featured glow, and the supplied Downloads logo.
+  Mark/lockup/icon/splash provenance is recorded in `assets/logo/provenance.json`.
+- Riverpod owns shared coordinator UI snapshots; GoRouter provides adaptive
+  Chat / Models / Server / Settings navigation and three-page onboarding.
+- New UI controls use existing managed/model/cluster endpoints. User constraint:
+  no backend/inference changes. Server terminal displays real client-observed
+  coordinator/worker events and the existing log path; no new log API is added.
+- Tab switches preserve chat drafts and phone sharing. Reduced motion disables
+  status pulses and terminal typing. Tests use the requested four viewports,
+  1.3x text, authenticated model-control ordering, stale-result guards, and
+  snapshot retention. Preview images use mock coordinator data.
+- Backend executable, config locations, pairing URI scheme, Android application
+  ID, and release signing key retain compatibility with existing installs.
+
+## LAN pairing address correction
+
+- A live WARP setup exposed a QR-address bug: the route to `192.0.2.1` selected
+  the VPN interface while UDP discovery used Wi-Fi. `core/src/discovery.rs`
+  now selects the QR host through the LAN broadcast route without sending a
+  packet.
+- The rebuilt release coordinator advertises the Wi-Fi address with WARP still
+  active. Authenticated pairing and parallel health/model/pool requests were
+  verified locally; 68 core unit tests and 3 QR integration tests pass.
+- Existing TUI processes must restart to load the new binary. Phones paired to
+  the old VPN address must scan the new QR; saved phone addresses are not
+  changed by rebuilding the coordinator.
+
+## RPC lifecycle investigation — 0.2.2 / Android +7
+
+- Reported incident: `~/.privateml/logs/cluster-502128-1.log`, Qwen 2.5 7B Q3,
+  4096 context, 25 laptop blocks + 3 phone blocks. Load completed and three
+  replies finished before a socket read failed during the fourth request.
+  The old log cannot establish a phone kill/crash versus transport loss; the
+  "same LAN" hint was misleading. Native source/runtime commits match b12110.
+- Fixed a reproduced failure where fatal RPC output left the coordinator
+  reporting Running until the child finished abort handling. A 500 ms monitor
+  now fails the run and clears readiness promptly.
+- Serialized/cached idle probes, excluded them from preflight/launch, and
+  rechecked ownership after waits. Stop cancels a load pending validation or
+  RPC access. Real startup/reload is tested with concurrent polls/heartbeats.
+- Phone reports include session, monotonic sequence, state, exit code, and
+  native output. Old sessions/out-of-order requests cannot resurrect or withdraw
+  the current worker. Address/session changes invalidate loaded buffers; old
+  allocation credit requires the same session. Late phone evidence augments
+  the failed run's log.
+- APK adds `WorkerKeepAliveService` (connected-device foreground type), CPU and
+  Wi-Fi locks, notification stop action, tracked-process cleanup, and private
+  retained error output. The native wrapper observes app process death and
+  ignores SIGPIPE. A real test caught and avoided PR_SET_PDEATHSIG following
+  Dart's spawning thread rather than app lifetime.
+- Verified: 101 Rust tests, strict Clippy, 57 Flutter tests, analysis, native
+  lifecycle checks, real CPU/two-worker inference, 12-turn RPC with concurrent
+  polling, worker loss/recovery, reloads, and signal cleanup. Native RPC tests
+  use loopback stand-ins; Android foreground/lock behavior needs device testing.
+
+## User-selected models
+
+- The starter catalog is now optional. TUI **↑ → B** and Android **Models →
+  Find and download models** search Hugging Face, open `owner/repository`, or
+  accept a direct HTTP(S) GGUF link. Users select their own quantization.
+- `core/src/model_hub.rs` resolves repository revisions to commits and groups
+  complete split GGUFs. `/models/browse` returns sources; `/managed/download`
+  downloads/registers the chosen source. `/managed/install` also resumes or
+  verifies saved custom IDs. Pairing applies to the new endpoints.
+- Custom manifests/files are stored under `~/.privateml/models/custom/` and
+  survive restart. Partial downloads stay available for retry, but do not enter
+  `/models`. SHA-256, GGUF metadata, complete shard sets, and load-time planning
+  remain authoritative. Unversioned direct links restart rather than splice
+  unrelated partial data; validators use If-Range. HF_TOKEN is coordinator-only.
+- Split-file weight estimates include every shard. Additional shards are not
+  advertised as independent models. Custom models are downloaded before their
+  real layer metadata is used for planning; downloads do not auto-start inference.
+- Verification includes 114 Rust tests, strict Clippy, Flutter analysis and 66
+  controller/widget checks (including four viewports at 1.3x text), release TUI
+  CLI/PTY checks, and an isolated HTTP download/resume/restart test. Live Hugging
+  Face search and nine real GGUF variants were checked without downloading their
+  weights.

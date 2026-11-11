@@ -1,0 +1,1 @@
+Each device holds its layers and their context memory. Intermediate data travels between them during chat.

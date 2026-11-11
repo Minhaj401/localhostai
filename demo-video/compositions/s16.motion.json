@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s16-title", "bySec": 0.8 },
+    { "kind": "appearsBy", "selector": "#s16-chat", "bySec": 0.9 },
+    { "kind": "before", "a": "#s16-question", "b": "#s16-speaker" },
+    { "kind": "before", "a": "#s16-speaker", "b": "#s16-answer-a" },
+    { "kind": "before", "a": "#s16-answer-c", "b": "#s16-caret" },
+    { "kind": "before", "a": "#s16-caret", "b": "#s16-composer" },
+    { "kind": "staysInFrame", "selector": "#s16-chat" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

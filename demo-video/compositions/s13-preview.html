@@ -1,0 +1,106 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s13-page-heading{display:flex;align-items:center;gap:20px}
+    #s13-back::before{content:'\f14f'}
+    .s13-chevron::before{content:'\f1f5'}
+    #s13-content{position:absolute;left:32px;right:32px;top:104px;display:flex;flex-direction:column;gap:16px}
+    #s13-controls{display:grid;grid-template-columns:minmax(0,1fr) 280px auto auto;align-items:end;gap:20px;padding:20px}
+    .s13-field{min-width:0}
+    .s13-field-label{display:block;margin-bottom:8px}
+    .s13-field-value{justify-content:space-between;color:#FFF;white-space:nowrap}
+    .s13-chevron{flex:none;color:#A1A1AA}
+    #s13-plan{display:flex;flex-direction:column;gap:12px}
+    #s13-plan-header{display:flex;align-items:center;gap:24px}
+    #s13-fits{margin-left:auto}
+    .s13-allocation{display:flex;flex-direction:column;gap:8px}
+    .s13-allocation-label{display:flex;align-items:center;justify-content:space-between;font:500 34px/1.2 Outfit,sans-serif}
+    .s13-allocation-count{font-family:'JetBrains Mono',monospace;font-size:30px;line-height:1.35}
+    .s13-allocation-track{height:10px;background:#2E2E35}
+    .s13-allocation-fill{height:100%;background:#5CF26A}
+    #s13-laptop-fill{width:89.285714%}
+    #s13-phone-fill{width:10.714286%}
+  </style>
+  <div id="root" data-composition-id="s13" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s13-title" class="headline" data-var-text="s13-title">Preview the split</h1>
+      <p id="s13-demo-label" class="example-note">Recreated UI · sample data</p>
+      <!-- Enlarged Model placement section from the pushed /devices page. -->
+      <div id="s13-pool" class="ui-stage">
+        <div id="s13-topbar" class="ui-topbar">
+          <div id="s13-page-heading">
+            <i id="s13-back" class="icon" role="img" aria-label="Back to Server"></i>
+            <div id="s13-page-title" class="ui-page-title">Compute pool</div>
+          </div>
+          <i id="s13-refresh" class="icon i-refresh muted" role="img" aria-label="Refresh"></i>
+        </div>
+        <div id="s13-content">
+          <h2 id="s13-placement-title" class="ui-section-title">Model placement</h2>
+          <div id="s13-controls" class="ui-card">
+            <div id="s13-model-field" class="s13-field">
+              <span id="s13-model-label" class="ui-meta s13-field-label">Model</span>
+              <div id="s13-model" class="ui-input s13-field-value" aria-labelledby="s13-model-label">
+                <span id="s13-model-name">Qwen 2.5 7B Instruct</span>
+                <i class="icon s13-chevron" aria-hidden="true"></i>
+              </div>
+            </div>
+            <div id="s13-context-field" class="s13-field">
+              <span id="s13-context-label" class="ui-meta s13-field-label">Context size</span>
+              <div id="s13-context" class="ui-input s13-field-value" aria-labelledby="s13-context-label">
+                <span id="s13-context-value">4096 tokens</span>
+                <i class="icon s13-chevron" aria-hidden="true"></i>
+              </div>
+            </div>
+            <span id="s13-preview" class="ui-button secondary">Preview split</span>
+            <span id="s13-load" class="ui-button">Load model</span>
+          </div>
+          <div id="s13-plan" class="ui-card">
+            <div id="s13-plan-header">
+              <h3 id="s13-plan-title" class="ui-card-title">Split plan</h3>
+              <span id="s13-example-label" class="ui-meta">Illustrative example · estimated placement</span>
+              <span id="s13-fits" class="ui-badge active">Fits</span>
+            </div>
+            <div id="s13-laptop-allocation" class="s13-allocation">
+              <div class="s13-allocation-label">
+                <span id="s13-laptop-name">Laptop</span>
+                <span id="s13-laptop-count" class="s13-allocation-count"><span class="accent">25</span>/28 layers</span>
+              </div>
+              <div id="s13-laptop-track" class="s13-allocation-track" role="img" aria-label="Laptop: estimated 25 of 28 layers">
+                <div id="s13-laptop-fill" class="s13-allocation-fill"></div>
+              </div>
+            </div>
+            <div id="s13-phone-allocation" class="s13-allocation">
+              <div class="s13-allocation-label">
+                <span id="s13-phone-name">This phone</span>
+                <span id="s13-phone-count" class="s13-allocation-count"><span class="accent">3</span>/28 layers</span>
+              </div>
+              <div id="s13-phone-track" class="s13-allocation-track" role="img" aria-label="This phone: estimated 3 of 28 layers">
+                <div id="s13-phone-fill" class="s13-allocation-fill"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s13-title", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.18);
+    tl.fromTo("#s13-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.24, ease: "power3.out" }, 0.34);
+    tl.fromTo("#s13-pool", { opacity: 0, y: 28 }, { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" }, 0.42);
+    tl.fromTo("#s13-context", { borderColor: "#2E2E35", boxShadow: "0 0 0 0px rgba(92,242,106,0)" }, { borderColor: "#5CF26A", boxShadow: "0 0 0 3px rgba(92,242,106,0.22)", duration: 0.3, ease: "power2.out" }, 1.35);
+    tl.fromTo("#s13-context-value", { opacity: 0.45 }, { opacity: 1, duration: 0.28, ease: "power3.out" }, 1.48);
+    tl.fromTo("#s13-context", { borderColor: "#5CF26A", boxShadow: "0 0 0 3px rgba(92,242,106,0.22)" }, { borderColor: "#2E2E35", boxShadow: "0 0 0 0px rgba(92,242,106,0)", duration: 0.35, ease: "power2.inOut", immediateRender: false }, 2.05);
+    tl.fromTo("#s13-preview", { scale: 1, backgroundColor: "#16161A" }, { scale: 0.96, backgroundColor: "#2E2E35", duration: 0.13, ease: "power2.in" }, 2.48);
+    tl.fromTo("#s13-preview", { scale: 0.96, backgroundColor: "#2E2E35" }, { scale: 1, backgroundColor: "#16161A", duration: 0.22, ease: "power3.out", immediateRender: false }, 2.61);
+    tl.fromTo("#s13-plan-header", { opacity: 0 }, { opacity: 1, duration: 0.28, ease: "power3.out" }, 2.92);
+    tl.fromTo("#s13-laptop-fill", { scaleX: 0, transformOrigin: "left center" }, { scaleX: 1, transformOrigin: "left center", duration: 0.72, ease: "power2.inOut" }, 3.25);
+    tl.fromTo("#s13-phone-fill", { scaleX: 0, transformOrigin: "left center" }, { scaleX: 1, transformOrigin: "left center", duration: 0.58, ease: "power2.inOut" }, 3.72);
+    tl.fromTo("#s13-laptop-count", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.42, ease: "power3.out" }, 4.12);
+    tl.fromTo("#s13-phone-count", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.5, ease: "power3.out" }, 4.8);
+
+    window.__timelines["s13"] = tl;
+  </script>
+</template>

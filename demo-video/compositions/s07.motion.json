@@ -1,0 +1,15 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s07-title", "bySec": 0.8 },
+    { "kind": "appearsBy", "selector": "#s07-laptop-count", "bySec": 1.8 },
+    { "kind": "before", "a": "#s07-laptop-count", "b": "#s07-layer-01" },
+    { "kind": "before", "a": "#s07-layer-01", "b": "#s07-layer-25" },
+    { "kind": "before", "a": "#s07-layer-25", "b": "#s07-plus" },
+    { "kind": "before", "a": "#s07-plus", "b": "#s07-phone-count" },
+    { "kind": "before", "a": "#s07-phone-count", "b": "#s07-layer-26" },
+    { "kind": "before", "a": "#s07-layer-26", "b": "#s07-layer-28" },
+    { "kind": "staysInFrame", "selector": "#s07-stage" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

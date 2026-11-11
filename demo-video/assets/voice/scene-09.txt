@@ -1,0 +1,1 @@
+Let’s try the workflow. Start the laptop app, then press Control P to show the pairing code.

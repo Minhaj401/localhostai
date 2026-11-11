@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s02-title", "bySec": 0.95 },
+    { "kind": "appearsBy", "selector": "#s02-laptop", "bySec": 1.3 },
+    { "kind": "before", "a": "#s02-laptop", "b": "#s02-lan-link" },
+    { "kind": "before", "a": "#s02-lan-link", "b": "#s02-phone" },
+    { "kind": "before", "a": "#s02-phone", "b": "#s02-phone-layers .s02-layer" },
+    { "kind": "staysInFrame", "selector": "#s02-laptop" },
+    { "kind": "staysInFrame", "selector": "#s02-phone" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

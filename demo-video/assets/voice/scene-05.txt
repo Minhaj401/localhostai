@@ -1,0 +1,1 @@
+The planner reserves operating-system headroom, and includes only workers it can reach and use.

@@ -1,0 +1,12 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s15-title", "bySec": 0.6 },
+    { "kind": "appearsBy", "selector": "#s15-chat", "bySec": 1.1 },
+    { "kind": "before", "a": "#s15-chat", "b": "#s15-ready" },
+    { "kind": "before", "a": "#s15-ready", "b": "#s15-question" },
+    { "kind": "before", "a": "#s15-question", "b": "#s15-send" },
+    { "kind": "staysInFrame", "selector": "#s15-chat" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

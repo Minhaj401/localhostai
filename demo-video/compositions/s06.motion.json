@@ -1,0 +1,15 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s06-title", "bySec": 0.75 },
+    { "kind": "appearsBy", "selector": "#s06-order-laptop", "bySec": 1.2 },
+    { "kind": "before", "a": "#s06-order-laptop", "b": "#s06-layer-01" },
+    { "kind": "before", "a": "#s06-layer-01", "b": "#s06-layer-25" },
+    { "kind": "before", "a": "#s06-layer-25", "b": "#s06-remainder-link" },
+    { "kind": "before", "a": "#s06-remainder-link", "b": "#s06-order-phone" },
+    { "kind": "before", "a": "#s06-order-phone", "b": "#s06-layer-26" },
+    { "kind": "before", "a": "#s06-layer-26", "b": "#s06-layer-28" },
+    { "kind": "staysInFrame", "selector": "#s06-stage" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

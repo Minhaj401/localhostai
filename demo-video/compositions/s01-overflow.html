@@ -1,0 +1,124 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root { position: absolute; inset: 0; }
+    .s01-diagram { font-family: Outfit, sans-serif; }
+    .s01-bezel { fill: #101012; stroke: #FFFFFF; stroke-width: 4; }
+    .s01-screen { fill: #000000; stroke: #A1A1AA; stroke-width: 3; }
+    .s01-detail { fill: none; stroke: #A1A1AA; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .s01-bay { fill: #000000; stroke: #5CF26A; stroke-width: 3; }
+    .s01-layer { fill: #5CF26A; stroke: #5CF26A; stroke-width: 3; }
+    .s01-layer-pending { fill: #101012; stroke-width: 4; }
+    .s01-label { fill: #FFFFFF; font-size: 34px; font-weight: 400; }
+    .s01-meta { fill: #A1A1AA; font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 500; }
+    .s01-count { fill: #FFFFFF; font-size: 64px; font-weight: 500; letter-spacing: -1px; }
+    .s01-secondary { fill: #A1A1AA; }
+  </style>
+  <div id="root" data-composition-id="s01" data-width="1920" data-height="1080" data-duration="7.5">
+    <div id="s01-scene" class="scene">
+      <h1 id="s01-title" class="headline" data-var-text="s01-title">Where do the extra layers go?</h1>
+      <p id="s01-example" class="example-note">Illustrative example</p>
+
+      <svg id="s01-diagram" class="stage s01-diagram" width="1536" height="602" viewBox="0 0 1536 602" role="img" aria-labelledby="s01-diagram-title s01-diagram-description">
+        <title id="s01-diagram-title">A model reaches the laptop's safe memory boundary</title>
+        <desc id="s01-diagram-description">Illustrative Qwen 2.5 7B Instruct model with exactly 28 layer blocks. Twenty-five filled blocks occupy the laptop's safe-memory bay. Three outlined blocks remain outside the laptop.</desc>
+
+        <!-- Device chrome uses the registry's inset screen-slot vocabulary. -->
+        <g id="s01-laptop">
+          <rect id="s01-laptop-bezel" class="s01-bezel" x="48" y="12" width="1024" height="516" rx="24" />
+          <circle id="s01-laptop-camera" cx="560" cy="28" r="4" fill="#A1A1AA" />
+          <rect id="s01-laptop-screen" class="s01-screen" x="72" y="44" width="976" height="452" rx="12" />
+          <path id="s01-screen-header-rule" class="s01-detail" d="M72 120H1048" />
+          <text id="s01-model-name" class="s01-label" x="104" y="96">Qwen 2.5 7B Instruct</text>
+          <text id="s01-model-total" class="s01-meta" x="1016" y="94" text-anchor="end">28 layers</text>
+
+          <g id="s01-safe-memory">
+            <rect id="s01-safe-memory-boundary" class="s01-bay" x="96" y="138" width="928" height="340" rx="8" />
+            <text id="s01-safe-memory-label" class="s01-label" x="120" y="178">Laptop · safe memory</text>
+            <text id="s01-laptop-count" class="s01-meta" x="1000" y="176" text-anchor="end">25 layers</text>
+
+            <!-- Five rows of five; each layer is a separately addressable shape. -->
+            <g id="s01-laptop-layers" data-layer-count="25">
+              <rect id="s01-layer-01" class="s01-layer" x="128" y="202" width="160" height="40" rx="5" />
+              <rect id="s01-layer-02" class="s01-layer" x="304" y="202" width="160" height="40" rx="5" />
+              <rect id="s01-layer-03" class="s01-layer" x="480" y="202" width="160" height="40" rx="5" />
+              <rect id="s01-layer-04" class="s01-layer" x="656" y="202" width="160" height="40" rx="5" />
+              <rect id="s01-layer-05" class="s01-layer" x="832" y="202" width="160" height="40" rx="5" />
+              <rect id="s01-layer-06" class="s01-layer" x="128" y="254" width="160" height="40" rx="5" />
+              <rect id="s01-layer-07" class="s01-layer" x="304" y="254" width="160" height="40" rx="5" />
+              <rect id="s01-layer-08" class="s01-layer" x="480" y="254" width="160" height="40" rx="5" />
+              <rect id="s01-layer-09" class="s01-layer" x="656" y="254" width="160" height="40" rx="5" />
+              <rect id="s01-layer-10" class="s01-layer" x="832" y="254" width="160" height="40" rx="5" />
+              <rect id="s01-layer-11" class="s01-layer" x="128" y="306" width="160" height="40" rx="5" />
+              <rect id="s01-layer-12" class="s01-layer" x="304" y="306" width="160" height="40" rx="5" />
+              <rect id="s01-layer-13" class="s01-layer" x="480" y="306" width="160" height="40" rx="5" />
+              <rect id="s01-layer-14" class="s01-layer" x="656" y="306" width="160" height="40" rx="5" />
+              <rect id="s01-layer-15" class="s01-layer" x="832" y="306" width="160" height="40" rx="5" />
+              <rect id="s01-layer-16" class="s01-layer" x="128" y="358" width="160" height="40" rx="5" />
+              <rect id="s01-layer-17" class="s01-layer" x="304" y="358" width="160" height="40" rx="5" />
+              <rect id="s01-layer-18" class="s01-layer" x="480" y="358" width="160" height="40" rx="5" />
+              <rect id="s01-layer-19" class="s01-layer" x="656" y="358" width="160" height="40" rx="5" />
+              <rect id="s01-layer-20" class="s01-layer" x="832" y="358" width="160" height="40" rx="5" />
+              <rect id="s01-layer-21" class="s01-layer" x="128" y="410" width="160" height="40" rx="5" />
+              <rect id="s01-layer-22" class="s01-layer" x="304" y="410" width="160" height="40" rx="5" />
+              <rect id="s01-layer-23" class="s01-layer" x="480" y="410" width="160" height="40" rx="5" />
+              <rect id="s01-layer-24" class="s01-layer" x="656" y="410" width="160" height="40" rx="5" />
+              <rect id="s01-layer-25" class="s01-layer" x="832" y="410" width="160" height="40" rx="5" />
+            </g>
+          </g>
+
+          <path id="s01-laptop-base" class="s01-bezel" stroke-linejoin="round" d="M48 528H1072L1120 556V560Q1120 572 1100 572H24Q4 572 4 560V556Z" />
+          <path id="s01-laptop-base-notch" class="s01-detail" d="M448 529L466 547H654L672 529" />
+        </g>
+
+        <g id="s01-overflow">
+          <text id="s01-overflow-count" class="s01-count" x="1208" y="168">3 layers</text>
+          <text id="s01-overflow-label" class="s01-label s01-secondary" x="1208" y="214">still need room</text>
+          <g id="s01-pending-layers" data-layer-count="3">
+            <rect id="s01-layer-26" class="s01-layer s01-layer-pending" x="1248" y="256" width="160" height="40" rx="5" />
+            <rect id="s01-layer-27" class="s01-layer s01-layer-pending" x="1248" y="312" width="160" height="40" rx="5" />
+            <rect id="s01-layer-28" class="s01-layer s01-layer-pending" x="1248" y="368" width="160" height="40" rx="5" />
+          </g>
+          <text id="s01-overflow-boundary-label" class="s01-label s01-secondary" x="1208" y="464">
+            <tspan id="s01-overflow-boundary-line-1" x="1208">Outside</tspan>
+            <tspan id="s01-overflow-boundary-line-2" x="1208" dy="40">safe memory</tspan>
+          </text>
+        </g>
+      </svg>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s01-title",
+      { opacity: 0, filter: "blur(8px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.5, ease: "power3.out" },
+      0.35);
+    tl.fromTo("#s01-example",
+      { opacity: 0 },
+      { opacity: 1, duration: 0.45, ease: "power3.out" },
+      0.65);
+    tl.fromTo("#s01-laptop",
+      { opacity: 0, scale: 0.985, transformOrigin: "50% 100%" },
+      { opacity: 1, scale: 1, transformOrigin: "50% 100%", duration: 0.7, ease: "power3.out" },
+      0.55);
+    tl.fromTo("#s01-laptop-layers .s01-layer",
+      { opacity: 0, scale: 0.82, transformOrigin: "50% 50%" },
+      { opacity: 1, scale: 1, transformOrigin: "50% 50%", duration: 0.6, stagger: 0.067, ease: "power2.inOut" },
+      1.25);
+    tl.fromTo("#s01-pending-layers .s01-layer",
+      { opacity: 0, x: -48 },
+      { opacity: 1, x: 0, duration: 0.6, stagger: 0.18, ease: "power3.out" },
+      3.55);
+    tl.fromTo("#s01-overflow-count, #s01-overflow-label",
+      { opacity: 0, filter: "blur(6px)" },
+      { opacity: 1, filter: "blur(0px)", duration: 0.55, stagger: 0.1, ease: "power3.out" },
+      4.3);
+    tl.fromTo("#s01-overflow-boundary-label",
+      { opacity: 0, x: -24 },
+      { opacity: 1, x: 0, duration: 0.55, ease: "power3.out" },
+      4.75);
+
+    window.__timelines['s01'] = tl;
+  </script>
+</template>

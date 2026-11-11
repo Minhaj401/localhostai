@@ -1,0 +1,80 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s12-sharing-card{position:absolute;left:32px;right:32px;top:104px}
+    #s12-sharing-row{display:flex;align-items:center;gap:24px}
+    #s12-phone-icon{flex:none;font-size:40px;color:#A1A1AA}
+    #s12-sharing-copy{flex:1;min-width:0}
+    #s12-sharing-description{max-width:840px;margin-top:8px;text-wrap:balance}
+    #s12-sharing-switch{flex:none}
+    #s12-sharing-switch::after{display:none}
+    #s12-switch-knob{display:block;width:36px;height:36px;background:#000;border-radius:50%}
+    #s12-notification-label{position:absolute;left:306px;top:552px;color:#A1A1AA}
+    #s12-notification{position:absolute;left:306px;top:600px;width:1308px;padding:16px 24px;background:#16161A;border-color:#2E2E35}
+    #s12-notification-header{display:flex;align-items:center;gap:12px;min-height:34px;font:500 28px/1.2 Outfit,sans-serif;color:#A1A1AA}
+    #s12-notification-mark{display:block;width:32px;height:32px;object-fit:contain}
+    #s12-notification-message{margin-top:4px;font:500 36px/1.2 Outfit,sans-serif;color:#FFF}
+    #s12-stop-sharing{margin-top:4px;min-height:40px;padding:4px 0;color:#5CF26A;font-size:28px}
+  </style>
+  <div id="root" data-composition-id="s12" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s12-title" class="headline" data-var-text="s12-title">Share this phone</h1>
+      <p id="s12-demo-label" class="example-note">Recreated UI · sample data</p>
+      <div id="s12-server" class="ui-stage">
+        <div id="s12-server-topbar" class="ui-topbar">
+          <div class="ui-page-title">Server</div>
+          <i class="icon i-refresh muted" role="img" aria-label="Refresh server"></i>
+        </div>
+        <!-- Source Server crop, focused on the sharing control and its subtitle. -->
+        <div id="s12-sharing-card" class="ui-card">
+          <div id="s12-sharing-row">
+            <i id="s12-phone-icon" class="icon i-phone" aria-hidden="true"></i>
+            <div id="s12-sharing-copy">
+              <h2 id="s12-sharing-label" class="ui-card-title">Share this phone</h2>
+              <p id="s12-sharing-description" class="ui-description">Run only the layers that do not fit on the laptop. Keep the app open while sharing.</p>
+            </div>
+            <div id="s12-sharing-switch" class="ui-switch" role="switch" aria-checked="true" aria-labelledby="s12-sharing-label"><span id="s12-switch-knob" aria-hidden="true"></span></div>
+          </div>
+        </div>
+        <div id="s12-navigation" class="ui-nav">
+          <span class="ui-nav-item"><i class="icon i-chat" aria-hidden="true"></i>Chat</span>
+          <span class="ui-nav-item"><i class="icon i-box" aria-hidden="true"></i>Models</span>
+          <span class="ui-nav-item active" aria-current="page"><i class="icon i-server" aria-hidden="true"></i>Server</span>
+          <span class="ui-nav-item"><i class="icon i-settings" aria-hidden="true"></i>Settings</span>
+        </div>
+      </div>
+      <!-- Separate OS notification schematic, labelled independently of the app UI. -->
+      <p id="s12-notification-label" class="label" data-layout-allow-overlap>Android foreground notification · schematic</p>
+      <aside id="s12-notification" class="ui-card" aria-label="Schematic Android foreground notification" data-layout-allow-overlap>
+        <div id="s12-notification-header">
+          <img id="s12-notification-mark" src="assets/brand/mark.svg" alt="localhost.ai logo">
+          <span>localhost.ai</span>
+        </div>
+        <p id="s12-notification-message">localhost.ai is sharing compute</p>
+        <div id="s12-stop-sharing" class="ui-button ghost">Stop sharing</div>
+      </aside>
+    </div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s12-title", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.1);
+    tl.fromTo("#s12-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 0.28);
+    tl.fromTo("#s12-server", { opacity: 0, scale: 1.03 }, { opacity: 1, scale: 1, duration: 0.72, ease: "power4.out" }, 0.18);
+    tl.fromTo("#s12-server-topbar", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power3.out" }, 0.78);
+    tl.fromTo("#s12-sharing-card", { opacity: 0, clipPath: "inset(0 0 100% 0)" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.62, ease: "power3.out" }, 1.08);
+    tl.fromTo("#s12-phone-icon, #s12-sharing-copy", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.26, ease: "power3.out" }, 1.52);
+    tl.fromTo("#s12-sharing-switch", { backgroundColor: "#16161A", borderColor: "#6B6B73" }, { backgroundColor: "#5CF26A", borderColor: "#5CF26A", duration: 0.5, ease: "power2.inOut" }, 2.28);
+    tl.fromTo("#s12-switch-knob", { x: -46, backgroundColor: "#A1A1AA" }, { x: 0, backgroundColor: "#000000", duration: 0.5, ease: "power2.inOut" }, 2.28);
+    tl.fromTo("#s12-notification-label", { opacity: 0, filter: "blur(5px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.22, ease: "power3.out" }, 2.82);
+    tl.fromTo("#s12-notification", { opacity: 0, scaleY: 0.15, transformOrigin: "50% 0%" }, { opacity: 1, scaleY: 1, transformOrigin: "50% 0%", duration: 0.58, ease: "power3.out" }, 3.04);
+    tl.fromTo("#s12-notification-header", { opacity: 0 }, { opacity: 1, duration: 0.24, ease: "power3.out" }, 3.2);
+    tl.fromTo("#s12-notification-message", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power3.out" }, 3.34);
+    tl.fromTo("#s12-stop-sharing", { opacity: 0, clipPath: "inset(0 100% 0 0)" }, { opacity: 1, clipPath: "inset(0 0% 0 0)", duration: 0.55, ease: "power3.out" }, 3.68);
+    tl.fromTo("#s12-navigation", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 4.22);
+
+    window.__timelines["s12"] = tl;
+  </script>
+</template>

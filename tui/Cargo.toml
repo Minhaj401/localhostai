@@ -19,3 +19,5 @@ serde_json.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 tracing.workspace = true
+unicode-width = "0.2"
+unicode-segmentation = "1"

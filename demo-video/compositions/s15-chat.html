@@ -1,0 +1,74 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s15-new-chat::before{content:'\f45e'}
+    #s15-empty-title{position:absolute;left:32px;right:32px;top:112px;text-align:center}
+    #s15-ready{position:absolute;left:160px;right:160px;top:186px}
+    #s15-ready-bar{height:48px}
+    #s15-ready-label{flex:1;text-align:center;padding-right:31px}
+    #s15-ready-body{padding:12px 24px;font-size:28px;line-height:1.35}
+    #s15-model{position:absolute;left:32px;bottom:196px}
+    #s15-composer{position:absolute;left:32px;right:32px;bottom:108px;background:#101012;border-radius:24px}
+    #s15-question{font:400 40px/1.25 Outfit,sans-serif;color:#FFF}
+    #s15-send{margin-left:auto;flex:none;display:flex;align-items:center;justify-content:center;width:50px;height:50px;background:#5CF26A;color:#000;border-radius:50%}
+    #s15-send-icon::before{content:'\f15b'}
+  </style>
+  <div id="root" data-composition-id="s15" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s15-title" class="headline" data-var-text="s15-title">Ask your question</h1>
+      <p id="s15-demo-label" class="example-note">Recreated UI · sample data</p>
+      <!-- Chat stage, composer baseline and navigation match the verified s16 scale. -->
+      <div id="s15-chat" class="ui-stage">
+        <div id="s15-topbar" class="ui-topbar">
+          <div id="s15-brand" class="ui-brand"><span>localhost<span class="accent">.ai</span></span></div>
+          <i id="s15-new-chat" class="icon muted" role="img" aria-label="New chat"></i>
+        </div>
+        <h2 id="s15-empty-title" class="ui-section-title">Run AI locally.</h2>
+        <div id="s15-ready" class="terminal">
+          <div id="s15-ready-bar" class="terminal-bar">
+            <span id="s15-ready-dot" class="status-dot" aria-hidden="true"></span>
+            <span id="s15-ready-label">model ready</span>
+          </div>
+          <div id="s15-ready-body" class="terminal-body">
+            <p id="s15-ready-model" class="white">Qwen 2.5 7B Instruct</p>
+            <p id="s15-ready-prompt"><span class="accent">&gt;_</span> type a message below</p>
+          </div>
+        </div>
+        <div id="s15-model" class="ui-badge active">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="s15-model-name">Qwen 2.5 7B Instruct</span>
+        </div>
+        <div id="s15-composer" class="ui-input" aria-label="Message localhost.ai">
+          <span id="s15-question">Explain local AI in one sentence.</span>
+          <span id="s15-send" role="img" aria-label="Send message">
+            <!-- LucideIcons.arrowUp from the source Chat composer, using Lucide.ttf. -->
+            <i id="s15-send-icon" class="icon" aria-hidden="true"></i>
+          </span>
+        </div>
+        <nav id="s15-nav" class="ui-nav" aria-label="Main navigation">
+          <span id="s15-nav-chat" class="ui-nav-item active" aria-current="page"><i class="icon i-chat" aria-hidden="true"></i>Chat</span>
+          <span id="s15-nav-models" class="ui-nav-item"><i class="icon i-box" aria-hidden="true"></i>Models</span>
+          <span id="s15-nav-server" class="ui-nav-item"><i class="icon i-server" aria-hidden="true"></i>Server</span>
+          <span id="s15-nav-settings" class="ui-nav-item"><i class="icon i-settings" aria-hidden="true"></i>Settings</span>
+        </nav>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s15-title", { opacity: 0, color: "#5A5A63" }, { opacity: 1, color: "#FFFFFF", duration: 0.36, ease: "power2.out" }, 0.16);
+    tl.fromTo("#s15-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.24, ease: "power3.out" }, 0.34);
+    tl.fromTo("#s15-chat", { opacity: 0, scale: 0.985 }, { opacity: 1, scale: 1, duration: 0.58, ease: "power3.out" }, 0.42);
+    tl.fromTo("#s15-empty-title", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power3.out" }, 0.82);
+    tl.fromTo("#s15-ready", { opacity: 0, clipPath: "inset(0 0 100% 0)" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.52, ease: "power3.out" }, 1.18);
+    tl.fromTo("#s15-model", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.4, ease: "power3.out" }, 1.75);
+    tl.fromTo("#s15-composer", { opacity: 0 }, { opacity: 1, duration: 0.35, ease: "power3.out" }, 2.1);
+    tl.fromTo("#s15-question", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 1.65, ease: "none" }, 2.55);
+    tl.fromTo("#s15-send", { scale: 1, backgroundColor: "#5CF26A" }, { scale: 0.86, backgroundColor: "#8BFF95", duration: 0.13, ease: "power2.in" }, 4.89);
+    tl.fromTo("#s15-send", { scale: 0.86, backgroundColor: "#8BFF95" }, { scale: 1, backgroundColor: "#5CF26A", duration: 0.3, ease: "back.out(1.4)", immediateRender: false }, 5.02);
+
+    window.__timelines["s15"] = tl;
+  </script>
+</template>

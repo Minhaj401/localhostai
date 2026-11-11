@@ -1,48 +1,73 @@
-//! PrivateLM — one binary. Chatting UI *and* the LAN node itself.
-//!
-//! Usage:
-//!   privatelm                       start the node + interactive chat
-//!   privatelm --once "prompt"       single-shot: print streamed reply, exit
-//!   privatelm --port 8765           force the listen port
-//!   privatelm --no-lan              loopback only (no phone access)
-//!   privatelm --status              print node info and exit
-//!
-//! The laptop node runs as a task inside this process: embedded HTTP API,
-//! UDP discovery, Ollama/llama.cpp detection. Nothing else to install.
+//! PrivateLM — one binary: terminal chat and an embedded LAN node.
 
 mod api;
 mod app;
+mod cli;
+mod model_browser;
 mod ui;
 
-use privateml_core::{config::Config, server, NodeHandle};
-
-use anyhow::{bail, Result};
-use api::{ApiEvent, Node};
-use app::{App, DeviceRow, Msg, Overlay};
+use anyhow::{bail, Context, Result};
+use api::{ApiEvent, Health, Node};
+use app::{Action, App, CatalogRow, DeviceRow, Msg, Overlay};
 use crossterm::{
-    event::{self, Event as CEvent, KeyCode, KeyEventKind},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event as CEvent, KeyEventKind},
     execute,
-    terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use privateml_core::{config::Config, server, SplitPlan};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
+use serde_json::{json, Value};
+use std::io::{self, Write};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 enum UiEvent {
     Key(crossterm::event::KeyEvent),
-    Api(ApiEvent),
+    Paste(String),
+    Api {
+        generation: u64,
+        event: ApiEvent,
+    },
+    Status(Box<Snapshot>),
+    Pair(Result<String>),
+    DeviceToggle(Result<String>),
+    Browse {
+        request_id: u64,
+        result: Result<privateml_core::model_hub::HubResults>,
+    },
+    Downloaded {
+        operation_id: u64,
+        result: Result<privateml_core::ModelInfo>,
+    },
+    Preview {
+        request_id: u64,
+        model: String,
+        ctx: u32,
+        result: Result<SplitPlan>,
+    },
+    Installed {
+        operation_id: u64,
+        model: String,
+        result: Result<()>,
+    },
+    Cluster {
+        operation_id: u64,
+        model: Option<String>,
+        notice: String,
+    },
+    Stopped {
+        operation_id: u64,
+        result: Result<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
-    // ---- flags that do not start a UI
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    let options = cli::Options::parse(std::env::args().skip(1))?;
+    if options.help {
         print_help();
         return Ok(());
     }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
+    if options.version {
         println!(
             "{} {}",
             privateml_core::APP_DISPLAY_NAME,
@@ -51,487 +76,1045 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ---- config + node startup (the node IS this process)
-    let mut cfg = Config::load()?;
-    for (i, a) in args.iter().enumerate() {
-        match a.as_str() {
-            "--port" => {
-                if let Some(p) = args.get(i + 1).and_then(|p| p.parse().ok()) {
-                    cfg.port = p;
+    let (node, handle) = if let Some(url) = &options.connect {
+        (
+            Node::with_token(url, std::env::var("PRIVATELM_TOKEN").ok()),
+            None,
+        )
+    } else {
+        let mut cfg = Config::load()?;
+        if let Some(port) = options.port {
+            cfg.port = port;
+        }
+        if let Some(name) = options.name {
+            cfg.node_name = name;
+        }
+        if options.no_lan {
+            cfg.lan_enabled = false;
+        }
+        if options.no_discovery {
+            cfg.discovery = false;
+        }
+        if options.require_pairing {
+            cfg.require_pairing = true;
+        }
+        let handle = server::start(cfg).await?;
+        let node = Node::with_token(
+            &format!("http://127.0.0.1:{}", handle.port()),
+            Some(handle.pair_token().into()),
+        );
+        (node, Some(handle))
+    };
+
+    let interrupted_command_is_error = options.once.is_some() || options.status;
+    let work = async {
+        if options.status {
+            let h = node.health().await?;
+            println!("{} {}", privateml_core::APP_DISPLAY_NAME, h.version);
+            println!("node    : {}", h.name);
+            println!("listen  : {}", node.base());
+            println!("backend : {}", h.backend);
+            println!("pairing : {}", if h.pairing { "required" } else { "off" });
+            println!(
+                "models  : {}",
+                if h.models.is_empty() {
+                    "(none)".into()
+                } else {
+                    h.models.join(", ")
                 }
+            );
+            Ok(())
+        } else if let Some(prompt) = options.once {
+            once(node, prompt).await
+        } else if options.headless {
+            println!(
+                "{} {} — node listening on {}",
+                privateml_core::APP_DISPLAY_NAME,
+                env!("CARGO_PKG_VERSION"),
+                node.base()
+            );
+            if let Some(handle) = &handle {
+                println!("pair token: {}", handle.pair_token());
             }
-            "--headless" => {} // handled below
-            "--no-lan" => cfg.lan_enabled = false,
-            "--no-discovery" => cfg.discovery = false,
-            "--require-pairing" => cfg.require_pairing = true,
-            "--name" => {
-                if let Some(n) = args.get(i + 1) {
-                    cfg.node_name = n.clone();
-                }
+            std::future::pending::<Result<()>>().await
+        } else {
+            node.health().await?;
+            run_tui(node).await
+        }
+    };
+    let result = tokio::select! {
+        result = work => result,
+        result = shutdown_signal() => result.and_then(|()| {
+            if interrupted_command_is_error {
+                bail!("command interrupted");
             }
-            _ => {}
+            Ok(())
+        }),
+    };
+    if let Some(handle) = handle {
+        handle.shutdown();
+        handle.cluster().stop().await?;
+    }
+    result
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate())?;
+        let mut hangup = signal(SignalKind::hangup())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {},
+            _ = hangup.recv() => {},
         }
     }
-
-    // Reject unknown flags early instead of dropping into the TUI, which needs a TTY.
-    const KNOWN: &[&str] = &[
-        "--port", "--no-lan", "--no-discovery", "--require-pairing", "--name",
-        "--status", "--once", "--help", "-h", "--version", "-V", "--headless", "--connect",
-    ];
-    for a in &args {
-        if a.starts_with('-') && !KNOWN.contains(&a.as_str()) {
-            bail!("unknown option {a}\n\nRun `privateml --help` for usage.");
-        }
-    }
-
-    // Attach to a node that is already running instead of starting another.
-    // Needed because one node can only own the port, and a UI on another
-    // machine (or a second terminal) should still be able to drive it.
-    if let Some(pos) = args.iter().position(|a| a == "--connect") {
-        let url = match args.get(pos + 1) {
-            Some(u) if u.starts_with("http") => u.clone(),
-            _ => bail!("--connect needs a URL, e.g. --connect http://192.168.1.20:8765"),
-        };
-        let token = std::env::var("PRIVATELM_TOKEN").ok();
-        let node = match token {
-            Some(t) => Node::with_token(&url, Some(t)),
-            None => Node::new(&url),
-        };
-        // Fail fast with an actionable message rather than an empty screen.
-        match node.health().await {
-            Ok(h) => {
-                println!(
-                    "Connected to {} ({}) · {} · {} model(s)",
-                    h.name,
-                    url,
-                    h.backend,
-                    h.models.len()
-                );
-            }
-            Err(e) => bail!(
-                "cannot reach a PrivateLM node at {url}: {e}\n\
-                 Start one with `privateml` on that machine, or check the address/port."
-            ),
-        }
-        return run_tui(url, None).await;
-    }
-
-    let node_handle = server::start(cfg.clone()).await?;
-    let base = format!("http://127.0.0.1:{}", node_handle.port());
-
-    if args.iter().any(|a| a == "--status") {
-        let n = Node::with_token(&base, Some(node_handle.pair_token().into()));
-        let h = n.health().await?;
-        println!("{} {}", privateml_core::APP_DISPLAY_NAME, h.version);
-        println!("node    : {}", h.name);
-        println!("listen  : {}", base);
-        println!("backend : {}", if h.backend.is_empty() { "none" } else { &h.backend });
-        println!("pairing : {}", if h.pairing { "required" } else { "off" });
-        println!("models  : {}", if h.models.is_empty() { "(none)".into() } else { h.models.join(", ") });
-        node_handle.shutdown();
-        return Ok(());
-    }
-
-    if let Some(pos) = args.iter().position(|a| a == "--once") {
-        let prompt = args.get(pos + 1).cloned();
-        let r = once(&base, prompt).await;
-        node_handle.shutdown();
-        return r;
-    }
-
-    // Headless: node only, no UI. Useful for SSH, systemd, and testing.
-    if args.iter().any(|a| a == "--headless") {
-        let h = node_handle.clone_ref();
-        println!("{} {} — node listening on {base}", privateml_core::APP_DISPLAY_NAME, env!("CARGO_PKG_VERSION"));
-        println!("pair token: {}", h.pair_token());
-        tokio::signal::ctrl_c().await.ok();
-        node_handle.shutdown();
-        return Ok(());
-    }
-
-    // Interactive: hand the node handle to the UI so the status bar can show it.
-    let r = run_tui(base, Some(node_handle.clone_ref())).await;
-    node_handle.shutdown();
-    r
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
 }
 
 fn print_help() {
     println!(
-        "{name} {ver} — private LLM chat across your laptop and phone\n\
-\n\
-USAGE:\n  privatelm [OPTIONS]\n\
-\n\
-OPTIONS:\n\
+        "PrivateLM {} — private LLM chat across your laptop and phone\n\
+\nUSAGE:\n  privateml [OPTIONS]\n\
+\nOPTIONS:\n\
   --once <PROMPT>     print one streamed reply and exit\n\
-  --status            show node address, backend and models, then exit\n\
-  --port <N>          listen port (default 8765, next free if taken)\n\
-  --name <NAME>       name shown on the phone\n\
-  --no-lan            loopback only; the phone cannot connect\n\
-  --no-discovery      do not answer UDP discovery broadcasts\n\
-  --require-pairing   demand the pair token on every request\n\
-  --headless          run the node with no UI (SSH, systemd, testing)\n\
-  --connect <URL>     attach the UI to a node that is already running\n\
-  -h, --help          show this help\n\
-  -V, --version       show version\n\
-\n\
-FILES:\n  ~/.privateml/config.toml   settings\n\
+  --status           show node address, backend and models, then exit\n\
+  --port <N>         preferred port (default 8765, next free if taken)\n\
+  --name <NAME>      name shown on the phone\n\
+  --no-lan           loopback only\n\
+  --no-discovery     do not answer UDP discovery broadcasts\n\
+  --require-pairing  require a token for chat and control requests\n\
+  --headless         run the node without a UI\n\
+  --connect <URL>    use an existing node (also with --once or --status)\n\
+  -h, --help         show help\n\
+  -V, --version      show version\n\
+\nKEYS:\n  Enter send · ↑ models · F1 help · Ctrl+A activity · Ctrl+X stop\n\
+  Ctrl+D devices · Ctrl+P pair · PageUp/PageDown chat · Esc quit\n\
+\nFILES:\n  ~/.privateml/config.toml   settings\n\
   ~/.privateml/pair_token    shared secret for the phone\n\
-  ~/.privateml/models/       downloaded GGUF models\n",
-        name = privateml_core::APP_DISPLAY_NAME,
-        ver = env!("CARGO_PKG_VERSION")
+  ~/.privateml/models/       GGUF files\n\
+\nSet PRIVATELM_TOKEN when connecting to a node that requires pairing.",
+        env!("CARGO_PKG_VERSION")
     );
 }
 
-/// Single-shot mode — testable without a TTY.
-async fn once(url: &str, prompt: Option<String>) -> Result<()> {
-    let prompt = match prompt {
-        Some(p) if !p.is_empty() => p,
-        _ => bail!("--once needs a prompt: privatelm-tui --once \"hello\""),
-    };
-    let node = Node::new(url);
+async fn once(node: Node, prompt: String) -> Result<()> {
     let health = node.health().await?;
     if !health.ok {
-        bail!("node reports no backend (backend: {})", health.backend);
+        bail!("no model is loaded; run `privateml`, choose a model in the TUI, and press Enter");
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let node2 = node.clone();
     let model = health.models.first().cloned();
-    let handle = tokio::spawn(async move {
-        node2
-            .chat_stream(
-                model.as_deref(),
-                vec![("user".into(), prompt)],
-                None,
-                tx,
-            )
+    let task = tokio::spawn(async move {
+        node.chat_stream(model.as_deref(), vec![("user".into(), prompt)], None, tx)
             .await
     });
-    while let Some(ev) = rx.recv().await {
-        match ev {
-            ApiEvent::Chunk(s) => print!("{s}"),
-            ApiEvent::Failed(e) => eprintln!("\n[node error] {e}"),
-            ApiEvent::Done => break,
+    while let Some(event) = rx.recv().await {
+        match event {
+            ApiEvent::Chunk(text) => {
+                print!("{text}");
+                io::stdout().flush()?;
+            }
+            ApiEvent::Done | ApiEvent::Failed(_) => break,
         }
     }
     println!();
-    let _ = handle.await;
+    // A failed HTTP request, stream, or task must produce a nonzero exit code.
+    task.await??;
     Ok(())
 }
 
-async fn run_tui(url: String, handle: Option<NodeHandle>) -> Result<()> {
+struct TerminalGuard;
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+    }
+}
+
+async fn run_tui(node: Node) -> Result<()> {
     use std::io::IsTerminal;
-    if !io::stdout().is_terminal() {
-        bail!(
-            "PrivateLM's chat UI needs a terminal.\n\
-             Try: privateml --status   (node info)\n\
-             or:  privateml --once \"hello\"   (one reply)"
-        );
+    if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
+        bail!("PrivateLM's chat UI needs a terminal.\nTry: privateml --status or privateml --once \"hello\"");
     }
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
+    let _guard = TerminalGuard;
+    execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    event_loop(&mut terminal, node).await
+}
 
-    let res = event_loop(&mut terminal, url, handle).await;
+struct Snapshot {
+    health: Option<Health>,
+    devices: Option<Vec<DeviceRow>>,
+    cluster: Option<Value>,
+    models: Option<Vec<String>>,
+    managed: Option<Value>,
+}
 
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    res
+async fn snapshot(node: &Node) -> Snapshot {
+    let (health, devices, cluster, models, managed) = tokio::join!(
+        node.health(),
+        node.get_json("/peers"),
+        node.get_json("/cluster"),
+        node.get_json("/models"),
+        node.get_json("/managed")
+    );
+    Snapshot {
+        health: health.ok(),
+        devices: devices.ok().and_then(|v| {
+            v["devices"]
+                .as_array()
+                .map(|a| a.iter().map(DeviceRow::from_json).collect())
+        }),
+        cluster: cluster.ok(),
+        models: models.ok().and_then(|v| {
+            v["models"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|m| m["name"].as_str().map(String::from))
+                    .collect()
+            })
+        }),
+        managed: managed.ok(),
+    }
+}
+
+fn apply_snapshot(app: &mut App, update: Snapshot) {
+    if let Some(h) = update.health {
+        app.node_label = h.name;
+        app.backend_label = h.backend;
+        app.servable_models = h.models;
+        if !app
+            .model
+            .as_ref()
+            .is_some_and(|m| app.servable_models.contains(m))
+        {
+            app.model = app.servable_models.first().cloned();
+        }
+    } else {
+        app.backend_label = "unreachable".into();
+    }
+    if let Some(models) = update.models {
+        app.plannable_models = models;
+    }
+    if let Some(managed) = update.managed {
+        app.runtime_ready = managed["runtime_ready"].as_bool().unwrap_or(false);
+        app.catalog = managed["catalog"]
+            .as_array()
+            .map(|models| models.iter().filter_map(CatalogRow::from_json).collect())
+            .unwrap_or_default();
+        if let Some(custom) = managed["custom"].as_array() {
+            app.catalog
+                .extend(custom.iter().filter_map(CatalogRow::from_json));
+        }
+        let status = &managed["status"];
+        app.setup_phase = status["phase"].as_str().unwrap_or("idle").to_string();
+        app.setup_model = status["model"].as_str().map(String::from);
+        app.setup_message = status["message"].as_str().map(String::from);
+        app.setup_downloaded = status["downloaded_bytes"].as_u64().unwrap_or(0);
+        app.setup_total = status["total_bytes"].as_u64().unwrap_or(0);
+        app.setup_busy = matches!(
+            app.setup_phase.as_str(),
+            "downloading_runtime" | "installing_runtime" | "verifying_model" | "downloading_model"
+        );
+        if app.setup_busy {
+            let progress = if app.setup_total > 0 {
+                format!(
+                    " {:.1}% ({:.0}/{:.0} MiB)",
+                    app.setup_downloaded as f64 * 100.0 / app.setup_total as f64,
+                    app.setup_downloaded as f64 / 1_048_576.0,
+                    app.setup_total as f64 / 1_048_576.0,
+                )
+            } else {
+                String::new()
+            };
+            app.notice = Some(format!(
+                "{}{}",
+                status["message"]
+                    .as_str()
+                    .unwrap_or("Preparing local model"),
+                progress
+            ));
+            app.activity_message = app.notice.clone().unwrap_or_default();
+            app.operation_busy = true;
+        } else if app.setup_phase == "failed" {
+            app.notice = status["message"].as_str().map(String::from);
+            app.activity_message = app
+                .notice
+                .clone()
+                .unwrap_or_else(|| "Installation failed".into());
+            app.activity_error = true;
+            app.operation_busy = false;
+        }
+    }
+    let selected = app.selected_model.and_then(|i| app.models.get(i)).cloned();
+    app.models = app.servable_models.clone();
+    for model in &app.plannable_models {
+        if !app.models.contains(model) {
+            app.models.push(model.clone());
+        }
+    }
+    for model in &app.catalog {
+        if !app.models.contains(&model.id) {
+            app.models.push(model.id.clone());
+        }
+    }
+    app.selected_model = selected
+        .as_ref()
+        .and_then(|m| app.models.iter().position(|s| s == m))
+        .or_else(|| (!app.models.is_empty()).then_some(0));
+    if let Some(devices) = update.devices {
+        let selected = app
+            .selected_device
+            .and_then(|index| app.devices.get(index))
+            .map(|device| device.id.clone());
+        app.devices = devices;
+        app.selected_device = selected
+            .as_ref()
+            .and_then(|id| app.devices.iter().position(|device| &device.id == id))
+            .or_else(|| (app.overlay == Overlay::Devices && !app.devices.is_empty()).then_some(0));
+    } else {
+        for device in &mut app.devices {
+            device.usable = false;
+            device.reachable = false;
+        }
+    }
+    if let Some(cluster) = update.cluster {
+        app.cluster_state = cluster["state"].as_str().unwrap_or("stopped").to_string();
+        app.cluster_model = cluster["model"].as_str().map(String::from);
+        app.cluster_error = cluster["error"].as_str().map(String::from);
+        app.cluster_log = cluster["log"].as_str().map(String::from);
+        app.cluster_assignments =
+            serde_json::from_value(cluster["assignments"].clone()).unwrap_or_default();
+        app.cluster_label = match app.cluster_state.as_str() {
+            "running" => format!("serving {}", cluster["model"].as_str().unwrap_or("model")),
+            "starting" => "starting…".into(),
+            "failed" => "cluster failed".into(),
+            _ => "local".into(),
+        };
+        if let Some(error) = cluster["error"].as_str() {
+            app.notice = Some(error.into());
+            app.activity_message = error.into();
+            app.activity_error = true;
+            app.operation_busy = false;
+        }
+    }
+}
+
+fn prepare_first_run(app: &mut App) {
+    if app.servable_models.is_empty() && !app.models.is_empty() {
+        let installed = app
+            .catalog
+            .iter()
+            .find(|model| model.installed)
+            .map(|model| model.id.as_str())
+            .or_else(|| app.plannable_models.first().map(String::as_str));
+        let recommended = app
+            .catalog
+            .iter()
+            .find(|model| model.recommended)
+            .map(|model| model.id.as_str());
+        app.selected_model = installed
+            .or(recommended)
+            .and_then(|model| app.models.iter().position(|id| id == model))
+            .or(Some(0));
+        app.overlay = Overlay::ModelPicker;
+        app.notice = Some(
+            "Choose a model and press Enter, or B to find your own GGUF on Hugging Face or by URL."
+                .into(),
+        );
+    }
+}
+
+fn request_snapshot(node: &Node, tx: &UnboundedSender<UiEvent>) {
+    let node = node.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let _ = tx.send(UiEvent::Status(Box::new(snapshot(&node).await)));
+    });
+}
+
+fn request_model_preview(
+    node: &Node,
+    tx: &UnboundedSender<UiEvent>,
+    request_id: u64,
+    model: String,
+    ctx: u32,
+) {
+    let node = node.clone();
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = preview_model(&node, &model, ctx).await;
+        let _ = tx.send(UiEvent::Preview {
+            request_id,
+            model,
+            ctx,
+            result,
+        });
+    });
 }
 
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    url: String,
-    handle: Option<privateml_core::NodeHandle>,
+    node: Node,
 ) -> Result<()> {
-    let node = match &handle {
-        Some(h) => Node::with_token(&url, Some(h.pair_token().to_string())),
-        None => Node::new(&url),
-    };
-    let mut app = App::new(url.clone(), String::new());
-
-    // Health + model list on startup.
-    if let Ok(h) = node.health().await {
-        app.node_label = h.name;
-        app.backend_label = h.backend;
-        app.models = h.models;
-        app.model = app.models.first().cloned();
-        app.selected_model = if app.models.is_empty() { None } else { Some(0) };
-    }
-    refresh_devices(&node, &mut app).await;
-    refresh_cluster(&node, &mut app).await;
-
-    // Keyboard events come from a blocking thread; API events from tasks.
-    let (key_tx, mut rx): (UnboundedSender<UiEvent>, UnboundedReceiver<UiEvent>) =
-        mpsc::unbounded_channel();
-    let key_tx_events = key_tx.clone();
-    tokio::task::spawn_blocking(move || loop {
-        match event::read() {
-            Ok(CEvent::Key(k)) if k.kind == KeyEventKind::Press => {
-                if key_tx_events.send(UiEvent::Key(k)).is_err() {
-                    return;
-                }
+    let mut app = App::new(node.base().into(), String::new());
+    apply_snapshot(&mut app, snapshot(&node).await);
+    prepare_first_run(&mut app);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let key_tx = tx.clone();
+    tokio::task::spawn_blocking(move || {
+        // A permanently blocking event::read prevented Tokio from exiting even
+        // after Esc. Polling lets the thread notice its receiver was dropped.
+        while !key_tx.is_closed() {
+            match event::poll(std::time::Duration::from_millis(100)) {
+                Ok(true) => match event::read() {
+                    Ok(CEvent::Key(k)) if k.kind == KeyEventKind::Press => {
+                        if key_tx.send(UiEvent::Key(k)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(CEvent::Paste(text)) => {
+                        if key_tx.send(UiEvent::Paste(text)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                    _ => {}
+                },
+                Err(_) => break,
+                _ => {}
             }
-            Ok(_) => {}
-            Err(_) => return,
         }
     });
-
+    if app.overlay == Overlay::ModelPicker {
+        if let Action::Preview {
+            request_id,
+            model,
+            ctx,
+        } = app.request_preview()
+        {
+            request_model_preview(&node, &tx, request_id, model, ctx);
+        }
+    }
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(4));
     ticker.tick().await;
+    let mut refreshing = false;
+    let mut chat_generation = 0u64;
+    let mut chat_task: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         terminal.draw(|f| {
             ui::draw(f, &mut app);
             match app.overlay {
                 Overlay::ModelPicker => {
-                    let h = (app.models.len() as u16 + 4).min(14);
-                    let area = ui::centered_rect(60, h, f.area());
+                    let area = ui::centered_rect(
+                        96,
+                        (app.models.len().saturating_add(14).min(28)) as u16,
+                        f.area(),
+                    );
                     ui::model_picker(f, &app, area);
                 }
+                Overlay::ModelBrowser => {
+                    let area = ui::centered_rect(110, 28, f.area());
+                    ui::model_browser(f, &app.browser, area);
+                }
                 Overlay::Devices => {
-                    let h = (app.devices.len() as u16 + 8).min(18);
-                    let area = ui::centered_rect(86, h, f.area());
+                    let area = ui::centered_rect(
+                        112,
+                        (app.devices
+                            .len()
+                            .saturating_mul(2)
+                            .saturating_add(8)
+                            .min(24)) as u16,
+                        f.area(),
+                    );
                     ui::devices_panel(f, &app, area);
                 }
                 Overlay::Pairing => {
-                    let h = (app.qr_lines.len() as u16 + 8).min(f.area().height);
+                    let h = (app.qr_lines.len() + 8).min(u16::MAX as usize) as u16;
                     let w = app
                         .qr_lines
                         .first()
-                        .map(|l| l.chars().count() as u16 + 4)
-                        .unwrap_or(46)
-                        .max(46);
-                    let area = ui::centered_rect(w + 4, h, f.area());
+                        .map(|l| l.chars().count() + 8)
+                        .unwrap_or(50)
+                        .max(50)
+                        .min(u16::MAX as usize) as u16;
+                    let area = ui::centered_rect(w, h, f.area());
                     ui::pairing_panel(f, &app, area);
+                }
+                Overlay::Activity => {
+                    let area = ui::centered_rect(100, 24, f.area());
+                    ui::activity_panel(f, &app, area);
+                }
+                Overlay::Help => {
+                    let area = ui::centered_rect(88, 25, f.area());
+                    ui::help_panel(f, area);
                 }
                 Overlay::None => {}
             }
         })?;
-
-        let ev = tokio::select! {
-            got = rx.recv() => match got {
-                Some(e) => e,
-                None => break,
-            },
+        let event = tokio::select! {
+            event = rx.recv() => match event { Some(event) => event, None => break },
             _ = ticker.tick() => {
-                // Periodic refresh so the pool and cluster state stay truthful.
-                refresh_devices(&node, &mut app).await;
-                refresh_cluster(&node, &mut app).await;
+                if !refreshing { request_snapshot(&node, &tx); refreshing = true; }
                 continue;
             }
         };
-        match ev {
-            UiEvent::Api(ApiEvent::Chunk(s)) => {
-                app.streaming.push_str(&s);
-                app.scroll_to_bottom();
-            }
-            UiEvent::Api(ApiEvent::Done) => {
-                let content = std::mem::take(&mut app.streaming);
-                app.messages.push(Msg {
-                    role: "assistant".into(),
-                    content,
-                    tag: Some(app.model.clone().unwrap_or_default()),
-                });
-                app.busy = false;
-                app.scroll_to_bottom();
-            }
-            UiEvent::Api(ApiEvent::Failed(e)) => {
-                app.streaming.clear();
-                app.messages.push(Msg {
-                    role: "assistant".into(),
-                    content: format!("[error] {e}"),
-                    tag: None,
-                });
-                app.busy = false;
-            }
-            UiEvent::Key(key) => match key.code {
-                // ---- overlays close first
-                KeyCode::Esc if app.overlay != Overlay::None => app.overlay = Overlay::None,
-                KeyCode::Esc => break,
-                KeyCode::Char('d') if app.overlay == Overlay::None && !app.busy => {
-                    refresh_devices(&node, &mut app).await;
-                    app.overlay = Overlay::Devices;
-                }
-                KeyCode::Char('p') if app.overlay == Overlay::None && !app.busy => {
-                    load_qr(&node, &mut app).await;
-                    app.overlay = Overlay::Pairing;
-                }
-                // ---- model picker movement
-                KeyCode::Up if app.overlay == Overlay::ModelPicker => {
-                    if let Some(i) = app.selected_model {
-                        app.selected_model = Some(i.saturating_sub(1));
+        match event {
+            UiEvent::Paste(text) => app.paste(&text),
+            UiEvent::Browse { request_id, result } => app.browser.apply(request_id, result),
+            UiEvent::Downloaded {
+                operation_id,
+                result,
+            } if operation_id == app.operation_id => {
+                app.operation_busy = false;
+                app.setup_busy = false;
+                match result {
+                    Ok(model) => {
+                        app.activity_message =
+                            "Download complete. Select the model to plan and load it.".into();
+                        app.activity_error = false;
+                        if !app.models.contains(&model.name) {
+                            app.models.push(model.name.clone());
+                        }
+                        if !app.plannable_models.contains(&model.name) {
+                            app.plannable_models.push(model.name.clone());
+                        }
+                        app.selected_model = app.models.iter().position(|id| id == &model.name);
+                        if app.overlay == Overlay::Activity {
+                            app.overlay = Overlay::ModelPicker;
+                        }
+                        if let Action::Preview {
+                            request_id,
+                            model,
+                            ctx,
+                        } = app.request_preview()
+                        {
+                            request_model_preview(&node, &tx, request_id, model, ctx);
+                        }
+                    }
+                    Err(error) => {
+                        app.activity_message = format!("Download failed: {error:#}");
+                        app.activity_error = true;
                     }
                 }
-                KeyCode::Down if app.overlay == Overlay::ModelPicker => {
-                    if let Some(i) = app.selected_model {
-                        if i + 1 < app.models.len() {
-                            app.selected_model = Some(i + 1);
+                app.notice = Some(app.activity_message.clone());
+                if !refreshing {
+                    request_snapshot(&node, &tx);
+                    refreshing = true;
+                }
+            }
+            UiEvent::Status(update) => {
+                apply_snapshot(&mut app, *update);
+                refreshing = false;
+            }
+            UiEvent::Pair(result) => match result {
+                Ok(uri) => match privateml_core::qr::encode(&uri) {
+                    Some(grid) => {
+                        app.qr_lines = privateml_core::qr::render_terminal(&grid, 4);
+                        app.pair_uri = uri;
+                    }
+                    None => app.notice = Some("Pairing payload is too large to encode".into()),
+                },
+                Err(e) => {
+                    app.notice = Some(format!("Could not read pairing info: {e}"));
+                    app.overlay = Overlay::None;
+                }
+            },
+            UiEvent::DeviceToggle(result) => {
+                app.notice = Some(match result {
+                    Ok(message) => message,
+                    Err(error) => format!("Could not update device: {error}"),
+                });
+                if !refreshing {
+                    request_snapshot(&node, &tx);
+                    refreshing = true;
+                }
+            }
+            UiEvent::Preview {
+                request_id,
+                model,
+                ctx,
+                result,
+            } => {
+                if request_id == app.preview_request_id
+                    && app
+                        .selected_model
+                        .and_then(|index| app.models.get(index))
+                        .is_some_and(|selected| selected == &model)
+                    && app.context_tokens == ctx
+                {
+                    app.preview_pending = false;
+                    match result {
+                        Ok(plan) => {
+                            app.preview = Some(plan);
+                            app.preview_error = None;
+                        }
+                        Err(error) => {
+                            app.preview = None;
+                            app.preview_error = Some(format!("{error:#}"));
                         }
                     }
                 }
-                KeyCode::Enter if app.overlay == Overlay::ModelPicker => {
-                    app.model = app.selected_model.and_then(|i| app.models.get(i).cloned());
-                    app.overlay = Overlay::None;
-                }
-                KeyCode::Char('D') if app.overlay == Overlay::ModelPicker => {
-                    let chosen = app.selected_model.and_then(|i| app.models.get(i).cloned());
-                    app.overlay = Overlay::None;
-                    if let Some(m) = chosen {
-                        start_distributed(&node, &mut app, &m).await;
+            }
+            UiEvent::Installed {
+                operation_id,
+                model,
+                result,
+            } if operation_id == app.operation_id => {
+                app.operation_busy = false;
+                app.setup_busy = false;
+                match result {
+                    Ok(()) => {
+                        app.activity_message = format!("Installed and verified {model}");
+                        app.activity_error = false;
+                        app.notice = Some(app.activity_message.clone());
+                    }
+                    Err(error) => {
+                        app.activity_message = format!("Install failed: {error:#}");
+                        app.activity_error = true;
+                        app.notice = Some(app.activity_message.clone());
                     }
                 }
-                KeyCode::Up if app.overlay == Overlay::None && !app.busy => {
-                    app.selected_model = Some(match app.selected_model {
-                        Some(i) => i.saturating_sub(1),
-                        None => 0,
+                if !refreshing {
+                    request_snapshot(&node, &tx);
+                    refreshing = true;
+                }
+            }
+            UiEvent::Cluster {
+                operation_id,
+                model,
+                notice,
+            } if operation_id == app.operation_id => {
+                app.cluster_starting = false;
+                app.setup_busy = false;
+                app.operation_busy = false;
+                app.activity_error = model.is_none();
+                app.activity_message = notice.clone();
+                app.notice = Some(notice);
+                if let Some(model) = model {
+                    app.model = Some(model);
+                }
+                if !refreshing {
+                    request_snapshot(&node, &tx);
+                    refreshing = true;
+                }
+            }
+            UiEvent::Stopped {
+                operation_id,
+                result,
+            } if operation_id == app.operation_id => {
+                app.operation_busy = false;
+                app.cluster_starting = false;
+                match result {
+                    Ok(message) => {
+                        app.activity_message = message.clone();
+                        app.activity_error = false;
+                        app.notice = Some(message);
+                    }
+                    Err(error) => {
+                        app.activity_message = format!("Could not stop model: {error:#}");
+                        app.activity_error = true;
+                        app.notice = Some(app.activity_message.clone());
+                    }
+                }
+                if !refreshing {
+                    request_snapshot(&node, &tx);
+                    refreshing = true;
+                }
+            }
+            UiEvent::Api { generation, event } if generation == chat_generation => match event {
+                ApiEvent::Chunk(text) => app.streaming.push_str(&text),
+                ApiEvent::Done => {
+                    app.messages.push(Msg {
+                        role: "assistant".into(),
+                        content: std::mem::take(&mut app.streaming),
+                        tag: app.model.clone(),
                     });
-                    app.overlay = Overlay::ModelPicker;
+                    app.busy = false;
+                    app.activity_message = "Response complete".into();
+                    app.activity_error = false;
+                    chat_task = None;
                 }
-                KeyCode::Char('c')
-                    if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
-                {
-                    break
+                ApiEvent::Failed(error) => {
+                    app.streaming.clear();
+                    app.notice = Some(error.clone());
+                    app.busy = false;
+                    app.activity_message = error;
+                    app.activity_error = true;
+                    chat_task = None;
                 }
-                KeyCode::Backspace if app.overlay == Overlay::None => {
-                    app.input.pop();
+            },
+            UiEvent::Api { .. } => {
+                // A cancelled generation may still have queued terminal events.
+            }
+            UiEvent::Installed { .. }
+            | UiEvent::Cluster { .. }
+            | UiEvent::Stopped { .. }
+            | UiEvent::Downloaded { .. } => {
+                // A newer operation superseded this result.
+            }
+            UiEvent::Key(key) => match app.key(key) {
+                Action::Quit => break,
+                Action::None => {}
+                Action::Refresh => {
+                    if !refreshing {
+                        request_snapshot(&node, &tx);
+                        refreshing = true;
+                    }
                 }
-                KeyCode::Enter if app.overlay == Overlay::None && !app.busy && !app.input.is_empty() => {
-                    let prompt = std::mem::take(&mut app.input);
+                Action::Pair => {
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = node.get_json("/pair").await.and_then(|v| {
+                            let uri = v["uri"].as_str().unwrap_or("").to_string();
+                            if uri.is_empty() {
+                                bail!("node did not return a pairing URI");
+                            }
+                            Ok(uri)
+                        });
+                        let _ = tx.send(UiEvent::Pair(result));
+                    });
+                }
+                Action::Preview {
+                    request_id,
+                    model,
+                    ctx,
+                } => request_model_preview(&node, &tx, request_id, model, ctx),
+                Action::Browse { request_id, query } => {
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = node
+                            .post_json("/models/browse", &json!({"query":query}))
+                            .await
+                            .and_then(|value| {
+                                serde_json::from_value(value)
+                                    .context("invalid model search response")
+                            });
+                        let _ = tx.send(UiEvent::Browse { request_id, result });
+                    });
+                }
+                Action::Download { source, name } => {
+                    app.operation_id = app.operation_id.wrapping_add(1);
+                    let operation_id = app.operation_id;
+                    app.operation_busy = true;
+                    app.setup_busy = true;
+                    app.activity_error = false;
+                    app.activity_message = format!("Downloading {name}");
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = node
+                            .post_json_long("/managed/download", &json!({"source":source}))
+                            .await
+                            .and_then(|value| {
+                                serde_json::from_value(value["model"].clone())
+                                    .context("invalid downloaded model response")
+                            });
+                        let _ = tx.send(UiEvent::Downloaded {
+                            operation_id,
+                            result,
+                        });
+                    });
+                }
+                Action::InstallOnly(model) => {
+                    app.operation_id = app.operation_id.wrapping_add(1);
+                    let operation_id = app.operation_id;
+                    app.operation_busy = true;
+                    app.activity_error = false;
+                    app.activity_message = format!("Installing {model}");
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = node
+                            .post_json_long("/managed/install", &json!({"model": &model}))
+                            .await
+                            .map(|_| ());
+                        let _ = tx.send(UiEvent::Installed {
+                            operation_id,
+                            model,
+                            result,
+                        });
+                    });
+                }
+                Action::ToggleDevice { id, enabled } => {
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = node
+                            .post_json("/peers/toggle", &json!({"id": id, "enabled": enabled}))
+                            .await
+                            .map(|_| {
+                                if enabled {
+                                    "Device included in future model loads".to_string()
+                                } else {
+                                    "Device excluded from future model loads".to_string()
+                                }
+                            });
+                        let _ = tx.send(UiEvent::DeviceToggle(result));
+                    });
+                }
+                Action::Start { model, ctx } => {
+                    app.operation_id = app.operation_id.wrapping_add(1);
+                    let operation_id = app.operation_id;
+                    app.cluster_starting = true;
+                    app.operation_busy = true;
+                    app.activity_error = false;
+                    app.setup_busy = app
+                        .catalog_model(&model)
+                        .is_some_and(|entry| !entry.installed || !app.runtime_ready);
+                    app.notice = Some(if app.setup_busy {
+                        format!("Preparing {model} for first use…")
+                    } else {
+                        format!("Planning and loading {model} at {ctx} tokens…")
+                    });
+                    app.activity_message = app.notice.clone().unwrap_or_default();
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = start_distributed(&node, &model, ctx).await;
+                        let (model, notice) = match result {
+                            Ok(summary) => (Some(model), summary),
+                            Err(e) => (None, format!("Could not start: {e}")),
+                        };
+                        let _ = tx.send(UiEvent::Cluster {
+                            operation_id,
+                            model,
+                            notice,
+                        });
+                    });
+                }
+                Action::StopCluster => {
+                    app.operation_id = app.operation_id.wrapping_add(1);
+                    let operation_id = app.operation_id;
+                    app.overlay = Overlay::Activity;
+                    app.operation_busy = true;
+                    app.activity_error = false;
+                    app.activity_message = "Stopping the active model…".into();
+                    let node = node.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = stop_cluster(&node).await;
+                        let _ = tx.send(UiEvent::Stopped {
+                            operation_id,
+                            result,
+                        });
+                    });
+                }
+                Action::CancelChat => {
+                    chat_generation = chat_generation.wrapping_add(1);
+                    if let Some(task) = chat_task.take() {
+                        task.abort();
+                    }
+                    if !app.streaming.is_empty() {
+                        app.messages.push(Msg {
+                            role: "assistant".into(),
+                            content: std::mem::take(&mut app.streaming),
+                            tag: Some("interrupted".into()),
+                        });
+                    }
+                    app.busy = false;
+                    app.notice = Some("Generation stopped".into());
+                    app.activity_message = "Generation stopped".into();
+                    app.activity_error = false;
+                }
+                Action::Send => {
                     app.messages.push(Msg {
                         role: "user".into(),
-                        content: prompt.clone(),
+                        content: std::mem::take(&mut app.input),
                         tag: None,
                     });
+                    app.input_cursor = 0;
                     app.busy = true;
                     app.streaming.clear();
+                    app.notice = None;
+                    app.activity_message = "Generating response…".into();
+                    app.activity_error = false;
                     app.scroll_to_bottom();
+                    chat_generation = chat_generation.wrapping_add(1);
+                    let generation = chat_generation;
                     let node = node.clone();
                     let history = app.history();
                     let model = app.model.clone();
                     let system = app.system_prompt.clone();
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    let tx_err = tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = node
-                            .chat_stream(
-                                model.as_deref(),
-                                history,
-                                if system.is_empty() { None } else { Some(&system) },
-                                tx,
-                            )
-                            .await
-                        {
-                            let _ = tx_err.send(ApiEvent::Failed(e.to_string()));
-                        }
-                    });
-                    // splice the API receiver into the main receiver
-                    tokio::spawn(forward(rx, key_tx.clone()));
+                    let (api_tx, api_rx) = mpsc::unbounded_channel();
+                    chat_task = Some(tokio::spawn(async move {
+                        // The core client emits exactly one Failed event for
+                        // every error, including transport failures.
+                        let _ = node
+                            .chat_stream(model.as_deref(), history, Some(&system), api_tx)
+                            .await;
+                    }));
+                    tokio::spawn(forward(api_rx, tx.clone(), generation));
                 }
-                KeyCode::Char(c) if app.overlay == Overlay::None => app.input.push(c),
-                _ => {}
             },
         }
     }
     Ok(())
 }
 
-/// Pull the device pool from the node. Only reachable devices are counted,
-/// so the number shown here is memory we can genuinely use.
-async fn refresh_devices(node: &Node, app: &mut App) {
-    if let Ok(v) = node.get_json("/peers").await {
-        if let Some(arr) = v["devices"].as_array() {
-            app.devices = arr.iter().map(DeviceRow::from_json).collect();
-        }
-    }
+async fn preview_model(node: &Node, model: &str, ctx: u32) -> Result<SplitPlan> {
+    let value = node
+        .post_json("/cluster/plan", &json!({"model": model, "ctx": ctx}))
+        .await?;
+    serde_json::from_value(value["plan"].clone()).context("node returned an invalid split plan")
 }
 
-/// Reflect whether we are serving locally or from a split model.
-async fn refresh_cluster(node: &Node, app: &mut App) {
-    let Ok(v) = node.get_json("/cluster").await else { return };
-    let state = v["state"].as_str().unwrap_or("stopped");
-    app.cluster_label = match state {
-        "running" => format!(
-            "distributed {}/{}L",
-            v["layers_on_self"].as_u64().unwrap_or(0),
-            v["total_layers"].as_u64().unwrap_or(0)
-        ),
-        "starting" => "starting…".into(),
-        "failed" => "cluster failed".into(),
-        _ => "local".into(),
-    };
-    if let Some(err) = v["error"].as_str() {
-        app.notice = Some(err.to_string());
+async fn start_distributed(node: &Node, model: &str, ctx: u32) -> Result<String> {
+    let preview = preview_model(node, model, ctx).await?;
+    if !preview.fits() {
+        bail!(preview.summary);
     }
+    let managed = node.get_json("/managed").await?;
+    let catalog_entry = managed["catalog"].as_array().and_then(|catalog| {
+        catalog
+            .iter()
+            .find(|entry| entry["id"].as_str() == Some(model))
+    });
+    let custom_entry = managed["custom"].as_array().and_then(|custom| {
+        custom
+            .iter()
+            .find(|entry| entry["id"].as_str() == Some(model))
+    });
+    if catalog_entry.is_some() || custom_entry.is_some() {
+        node.post_json_long("/managed/install", &json!({"model": model}))
+            .await?;
+    }
+    let request = json!({"model": model, "ctx": ctx});
+    let plan = node.post_json("/cluster/plan", &request).await?;
+    let summary = plan["plan"]["summary"]
+        .as_str()
+        .unwrap_or("No plan returned");
+    if plan["plan"]["over_budget"].as_bool() != Some(false) {
+        bail!("{summary}");
+    }
+    let result = node.post_json("/cluster/start", &request).await?;
+    if result["ok"].as_bool() != Some(true) {
+        bail!(
+            "{}",
+            result["status"]["error"]
+                .as_str()
+                .or_else(|| result["error"].as_str())
+                .unwrap_or("cluster failed")
+        );
+    }
+    Ok(summary.into())
 }
 
-/// Build the pairing QR from the node's /pair payload.
-async fn load_qr(node: &Node, app: &mut App) {
-    let Ok(v) = node.get_json("/pair").await else {
-        app.notice = Some("could not read pairing info".into());
-        return;
-    };
-    let uri = v["uri"].as_str().unwrap_or("").to_string();
-    if uri.is_empty() {
-        app.notice = Some("node did not return a pairing URI".into());
-        return;
+async fn stop_cluster(node: &Node) -> Result<String> {
+    let value = node.post_json("/cluster/stop", &json!({})).await?;
+    if value["ok"].as_bool() != Some(true) {
+        bail!("node did not confirm model shutdown");
     }
-    match privateml_core::qr::encode(&uri) {
-        Some(grid) => {
-            app.qr_lines = privateml_core::qr::render_terminal(&grid, 2);
-            app.pair_uri = uri;
-        }
-        None => app.notice = Some("pairing payload too large to encode".into()),
-    }
+    Ok("Active model unloaded".into())
 }
 
-/// Plan a split for `model` across the pool, then ask the node to serve it.
-async fn start_distributed(node: &Node, app: &mut App, model: &str) {
-    // Register the model if the node does not know it yet (Ollama names may
-    // not have a GGUF path, which distributed mode requires).
-    let plan_req = serde_json::json!({ "model": model, "ctx": 4096 });
-    match node.post_json("/cluster/plan", &plan_req).await {
-        Ok(v) => {
-            let summary = v["plan"]["summary"].as_str().unwrap_or("").to_string();
-            let fits = !v["plan"]["over_budget"].as_bool().unwrap_or(true);
-            if !fits {
-                app.notice = Some(summary);
-                return;
-            }
-            app.notice = Some(format!("starting: {summary}"));
-            match node
-                .post_json("/cluster/start", &serde_json::json!({ "model": model, "ctx": 4096 }))
-                .await
-            {
-                Ok(r) => {
-                    if r["ok"].as_bool().unwrap_or(false) {
-                        app.notice = Some(format!("distributed: {summary}"));
-                        refresh_cluster(node, app).await;
-                    } else {
-                        let e = r["error"]
-                            .as_str()
-                            .or_else(|| r["status"]["error"].as_str())
-                            .unwrap_or("cluster failed");
-                        app.notice = Some(e.to_string());
-                    }
-                }
-                Err(e) => app.notice = Some(format!("start failed: {e}")),
-            }
-        }
-        Err(e) => {
-            // 404 means the model has no GGUF path registered — say so plainly.
-            app.notice = Some(format!(
-                "cannot plan '{model}': {e}. Distributed mode needs a GGUF file \
-                 (Ollama-only models must be exported first)."
-            ));
-        }
-    }
-}
-
-async fn forward(mut from: UnboundedReceiver<ApiEvent>, to: UnboundedSender<UiEvent>) {
-    while let Some(ev) = from.recv().await {
-        if to.send(UiEvent::Api(ev)).is_err() {
+async fn forward(
+    mut from: UnboundedReceiver<ApiEvent>,
+    to: UnboundedSender<UiEvent>,
+    generation: u64,
+) {
+    while let Some(event) = from.recv().await {
+        if to.send(UiEvent::Api { generation, event }).is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_catalog_populates_first_run_picker_and_progress() {
+        let mut app = App::new("http://node".into(), String::new());
+        apply_snapshot(
+            &mut app,
+            Snapshot {
+                health: Some(Health {
+                    name: "node".into(),
+                    backend: "none".into(),
+                    ..Default::default()
+                }),
+                devices: None,
+                cluster: None,
+                models: Some(vec![]),
+                managed: Some(json!({
+                    "status": {
+                        "phase": "downloading_model",
+                        "downloaded_bytes": 50,
+                        "total_bytes": 100,
+                        "message": "Downloading model"
+                    },
+                    "catalog": [{
+                        "id": "small-model",
+                        "display_name": "Small model",
+                        "description": "For first use",
+                        "bytes": 100,
+                        "license": "Apache-2.0",
+                        "installed": false,
+                        "recommended": true
+                    }]
+                })),
+            },
+        );
+        assert_eq!(app.models, vec!["small-model"]);
+        assert!(app.setup_busy);
+        assert!(app.notice.as_deref().unwrap().contains("50.0%"));
+        prepare_first_run(&mut app);
+        assert_eq!(app.overlay, Overlay::ModelPicker);
+        assert_eq!(app.selected_model, Some(0));
+    }
+
+    #[test]
+    fn snapshot_retains_activity_and_cluster_diagnostics() {
+        let mut app = App::new("http://node".into(), String::new());
+        apply_snapshot(
+            &mut app,
+            Snapshot {
+                health: None,
+                devices: None,
+                models: None,
+                managed: Some(json!({
+                    "runtime_ready": true,
+                    "status": {
+                        "phase": "downloading_model",
+                        "model": "large",
+                        "message": "Downloading large",
+                        "downloaded_bytes": 25,
+                        "total_bytes": 100
+                    },
+                    "catalog": []
+                })),
+                cluster: Some(json!({
+                    "state": "starting",
+                    "model": "large",
+                    "error": null,
+                    "log": "/tmp/cluster.log",
+                    "assignments": [{
+                        "device_id": "laptop",
+                        "device_name": "Laptop",
+                        "kind": "laptop",
+                        "layers": 25,
+                        "memory_mb": 1000,
+                        "budget_mb": 1200,
+                        "rpc": null
+                    }]
+                })),
+            },
+        );
+        assert_eq!(app.setup_model.as_deref(), Some("large"));
+        assert_eq!(app.setup_message.as_deref(), Some("Downloading large"));
+        assert_eq!(app.cluster_state, "starting");
+        assert_eq!(app.cluster_model.as_deref(), Some("large"));
+        assert_eq!(app.cluster_assignments[0].layers, 25);
+        assert_eq!(app.cluster_log.as_deref(), Some("/tmp/cluster.log"));
+        assert!(app.operation_busy);
     }
 }

@@ -1,0 +1,1 @@
+The laptop coordinates everything: storing the model, planning placement, and serving the chat.

@@ -1,0 +1,79 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s11-library-header{position:absolute;left:32px;right:32px;top:100px}
+    #s11-library-description{margin-top:8px}
+    #s11-search{position:absolute;left:32px;right:32px;top:208px}
+    #s11-filters{position:absolute;left:32px;right:32px;top:284px;display:flex;gap:12px}
+    #s11-selected-model{position:absolute;left:32px;right:32px;top:352px;padding:20px 24px}
+    #s11-model-heading{display:flex;align-items:center;gap:16px}
+    #s11-model-icon{display:flex;align-items:center;justify-content:center;flex:none;width:48px;height:48px;border-radius:12px;background:#5CF26A1F;color:#5CF26A}
+    #s11-model-name{font-size:40px}
+    #s11-selection-check{display:flex;align-items:center;justify-content:center;flex:none;width:40px;height:40px;margin-left:auto;border:2px solid #5CF26A;border-radius:50%;color:#5CF26A}
+    #s11-model-details{display:flex;align-items:center;gap:24px;margin-top:12px}
+    #s11-model-specification{font-size:32px;color:#A1A1AA}
+  </style>
+  <div id="root" data-composition-id="s11" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s11-title" class="headline" data-var-text="s11-title">Choose your model</h1>
+      <p id="s11-demo-label" class="example-note">Recreated UI · sample data</p>
+      <div id="s11-models" class="ui-stage">
+        <div id="s11-models-topbar" class="ui-topbar">
+          <div class="ui-page-title">Models</div>
+          <i class="icon i-refresh muted" role="img" aria-label="Refresh models"></i>
+        </div>
+        <div id="s11-library-header">
+          <h2 class="ui-section-title">Your model library</h2>
+          <p id="s11-library-description" class="ui-description">Pinned GGUFs. Download once, run on your own devices.</p>
+        </div>
+        <div id="s11-search" class="ui-input">
+          <i class="icon i-search" aria-hidden="true"></i>
+          <span id="s11-search-query" class="white">Qwen 2.5 7B</span>
+        </div>
+        <div id="s11-filters" role="tablist" aria-label="Model library filter">
+          <span id="s11-all-filter" class="ui-badge active" role="tab" aria-selected="true">All models</span>
+          <span id="s11-installed-filter" class="ui-badge" role="tab" aria-selected="false">Installed</span>
+        </div>
+        <!-- Enlarged source model card; placement controls continue below the crop. -->
+        <div id="s11-selected-model" class="ui-card selected" aria-label="Selected model: Qwen 2.5 7B Instruct">
+          <div id="s11-model-heading">
+            <span id="s11-model-icon"><i class="icon i-box" aria-hidden="true"></i></span>
+            <h3 id="s11-model-name" class="ui-card-title">Qwen 2.5 7B Instruct</h3>
+            <span id="s11-selection-check" role="img" aria-label="Selected"><i class="icon i-check" aria-hidden="true"></i></span>
+          </div>
+          <div id="s11-model-details">
+            <p id="s11-model-specification" class="ui-meta"><span id="s11-model-size">3.55 GB</span> / <span id="s11-model-quantization">Q3_K_M</span></p>
+            <span id="s11-install-status" class="ui-badge">Installed</span>
+          </div>
+        </div>
+        <div id="s11-navigation" class="ui-nav">
+          <span class="ui-nav-item"><i class="icon i-chat" aria-hidden="true"></i>Chat</span>
+          <span class="ui-nav-item active" aria-current="page"><i class="icon i-box" aria-hidden="true"></i>Models</span>
+          <span class="ui-nav-item"><i class="icon i-server" aria-hidden="true"></i>Server</span>
+          <span class="ui-nav-item"><i class="icon i-settings" aria-hidden="true"></i>Settings</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s11-title", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.1);
+    tl.fromTo("#s11-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 0.28);
+    tl.fromTo("#s11-models", { opacity: 0, scale: 1.03 }, { opacity: 1, scale: 1, duration: 0.72, ease: "power4.out" }, 0.18);
+    tl.fromTo("#s11-models-topbar, #s11-library-header", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.26, ease: "power3.out" }, 0.82);
+    tl.fromTo("#s11-search", { opacity: 0, clipPath: "inset(0 100% 0 0)" }, { opacity: 1, clipPath: "inset(0 0% 0 0)", duration: 0.52, ease: "power3.out" }, 1.35);
+    tl.fromTo("#s11-search-query", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.72, ease: "steps(11)" }, 1.86);
+    tl.fromTo("#s11-filters", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 2.48);
+    tl.fromTo("#s11-selected-model", { opacity: 0, clipPath: "inset(0 0 100% 0)", borderColor: "#1F1F24" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", borderColor: "#5CF26A", duration: 0.68, ease: "power3.out" }, 3.05);
+    tl.fromTo("#s11-model-icon, #s11-model-name", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power3.out" }, 3.58);
+    tl.fromTo("#s11-model-specification", { opacity: 0, clipPath: "inset(0 100% 0 0)" }, { opacity: 1, clipPath: "inset(0 0% 0 0)", duration: 0.5, ease: "power3.out" }, 4.02);
+    tl.fromTo("#s11-selection-check", { opacity: 0, scale: 0.55 }, { opacity: 1, scale: 1, duration: 0.38, ease: "back.out(1.4)" }, 4.62);
+    tl.fromTo("#s11-install-status", { opacity: 0, scale: 0.88 }, { opacity: 1, scale: 1, duration: 0.4, ease: "power4.out" }, 5.22);
+    tl.fromTo("#s11-navigation", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 5.48);
+
+    window.__timelines["s11"] = tl;
+  </script>
+</template>

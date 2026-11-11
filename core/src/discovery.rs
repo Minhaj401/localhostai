@@ -8,14 +8,16 @@
 //! the phone also subnet-scans :port directly. Here we only need to answer.
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use crate::DISCOVERY_MAGIC;
 use crate::DISCOVERY_PORT;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Advert {
     pub name: String,
     pub port: u16,
@@ -27,25 +29,19 @@ pub struct Advert {
 
 impl Advert {
     pub fn to_json(&self) -> String {
-        let models: Vec<String> = self.models.iter().map(|m| format!("\"{}\"", esc(m))).collect();
-        format!(
-            "{{\"name\":\"{}\",\"port\":{},\"backend\":\"{}\",\"models\":[{}],\"pairing\":{},\"v\":2}}",
-            esc(&self.name),
-            self.port,
-            esc(&self.backend),
-            models.join(","),
-            self.pairing
-        )
+        let mut value = serde_json::to_value(self).expect("advert is JSON serializable");
+        value["v"] = 2.into();
+        value.to_string()
     }
 }
 
-fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Spawn the responder. Returns a watch receiver whose value is the current
+/// Spawn the responder. Returns a watch sender whose value is the current
 /// advert — update it when the model list or backend changes.
-pub fn spawn(enabled: bool, seed: Advert) -> Result<watch::Sender<Advert>> {
+pub fn spawn(
+    enabled: bool,
+    seed: Advert,
+    mut shutdown: broadcast::Receiver<()>,
+) -> Result<watch::Sender<Advert>> {
     let (tx, rx) = watch::channel(seed);
     if !enabled {
         return Ok(tx);
@@ -69,11 +65,16 @@ pub fn spawn(enabled: bool, seed: Advert) -> Result<watch::Sender<Advert>> {
             let _ = sock.set_broadcast(true);
             // Generous timeout so we can notice shutdown between reads.
             let _ = sock.set_read_timeout(Some(std::time::Duration::from_millis(500)));
-            let rx = rx;
             let mut buf = [0u8; 512];
             loop {
                 if rx.has_changed().is_err() {
                     return; // sender dropped == shutting down
+                }
+                if !matches!(
+                    shutdown.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ) {
+                    return;
                 }
                 match sock.recv_from(&mut buf) {
                     Ok((n, peer)) => {
@@ -104,11 +105,17 @@ pub async fn probe(timeout: std::time::Duration) -> Vec<(Ipv4Addr, Advert)> {
             Err(_) => return out,
         };
         let _ = sock.set_broadcast(true);
-        let _ = sock.set_read_timeout(Some(timeout));
-        let _ = sock.send_to(DISCOVERY_MAGIC.as_bytes(), ("255.255.255.255", DISCOVERY_PORT));
-        let mut buf = [0u8; 512];
+        let _ = sock.send_to(
+            DISCOVERY_MAGIC.as_bytes(),
+            ("255.255.255.255", DISCOVERY_PORT),
+        );
+        let mut buf = vec![0u8; 65_507];
         let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            if remaining.is_zero() {
+                break;
+            }
+            let _ = sock.set_read_timeout(Some(remaining));
             match sock.recv_from(&mut buf) {
                 Ok((n, peer)) => {
                     let body = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -127,58 +134,27 @@ pub async fn probe(timeout: std::time::Duration) -> Vec<(Ipv4Addr, Advert)> {
     .unwrap_or_default()
 }
 
-/// Minimal parser for the advert JSON (no serde needed for this shape).
+/// Both the Rust and legacy Python responders emit ordinary JSON. Whitespace,
+/// escaped model names, and Unicode must work equally well from either one.
 pub fn parse_advert(s: &str) -> Option<Advert> {
-    let get_str = |key: &str| -> Option<String> {
-        let pat = format!("\"{key}\":\"");
-        let start = s.find(&pat)? + pat.len();
-        let rest = &s[start..];
-        // Walk to the terminating quote, honouring backslash escapes.
-        let mut out = String::new();
-        let mut escaped = false;
-        for c in rest.chars() {
-            if escaped {
-                out.push(c);
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                return Some(out);
-            } else {
-                out.push(c);
-            }
-        }
-        None
-    };
-    let port = {
-        let pat = "\"port\":";
-        let start = s.find(pat)? + pat.len();
-        let rest = &s[start..];
-        let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
-        rest[..end].parse().ok()?
-    };
-    let models = {
-        let pat = "\"models\":[";
-        let start = s.find(pat).map(|i| i + pat.len()).unwrap_or(0);
-        let rest = &s[start..];
-        let end = rest.find(']').unwrap_or(0);
-        rest[..end]
-            .split(',')
-            .map(|x| x.trim().trim_matches('"').to_string())
-            .filter(|x| !x.is_empty())
-            .collect()
-    };
-    let pairing = s.contains("\"pairing\":true");
-    Some(Advert {
-        name: get_str("name").unwrap_or_else(|| "node".into()),
-        port,
-        backend: get_str("backend").unwrap_or_else(|| "none".into()),
-        models,
-        pairing,
-    })
+    let advert: Advert = serde_json::from_str(s).ok()?;
+    (advert.port > 0).then_some(advert)
 }
 
 pub type SharedAdvert = Arc<watch::Sender<Advert>>;
+
+/// Best-effort LAN address of this machine.
+///
+/// Opening a UDP socket toward the LAN broadcast address makes the kernel pick
+/// a broadcast-capable local interface without sending a packet. Using an
+/// internet route here can select a VPN address that phones on the LAN cannot
+/// reach.
+pub fn local_ip() -> Option<std::net::IpAddr> {
+    let sock = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    sock.set_broadcast(true).ok()?;
+    sock.connect((Ipv4Addr::BROADCAST, DISCOVERY_PORT)).ok()?;
+    sock.local_addr().ok().map(|a| a.ip())
+}
 
 #[cfg(test)]
 mod tests {
@@ -201,16 +177,21 @@ mod tests {
         assert_eq!(p.models, vec!["qwen3:4b", "llama3"]);
         assert!(p.pairing);
     }
-}
 
-/// Best-effort LAN address of this machine.
-///
-/// Opening a UDP socket toward a routable address makes the kernel pick the
-/// interface it would actually use, without sending a packet.
-pub fn local_ip() -> Option<std::net::IpAddr> {
-    let sock = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    sock.connect(("192.0.2.1", 9)).ok()?; // TEST-NET-1, never routed
-    sock.local_addr().ok().map(|a| a.ip())
+    #[test]
+    fn legacy_json_whitespace_and_escaped_models_are_supported() {
+        let p = parse_advert(r#"{"name": "laptop", "port": 8765, "models": ["a,b]", "a\"b", "\u4f60\u597d"], "pairing": true}"#).unwrap();
+        assert_eq!(p.models, vec!["a,b]", "a\"b", "你好"]);
+        assert!(p.pairing);
+        let a = Advert {
+            name: "line\nbreak\t".into(),
+            port: 8765,
+            ..Default::default()
+        };
+        assert_eq!(parse_advert(&a.to_json()).unwrap().name, a.name);
+        assert!(parse_advert(r#"{"port":0}"#).is_none());
+        assert!(parse_advert(r#"{"port":8765 broken}"#).is_none());
+    }
 }
 
 #[cfg(test)]

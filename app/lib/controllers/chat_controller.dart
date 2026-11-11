@@ -13,9 +13,12 @@ import '../services/storage_service.dart';
 /// Mirrors PrivateLM's controller layer, with 'laptop' added as a first-class
 /// backend alongside 'cloud' and 'local'.
 class ChatController extends GetxController {
-  ChatController(this._storage);
+  ChatController(this._storage, {LlmBackend Function(String)? backendFactory})
+      : _backendFactory = backendFactory;
 
   final StorageService _storage;
+  final LlmBackend Function(String)? _backendFactory;
+  int _generation = 0;
 
   final messages = <ChatMessage>[].obs;
   final isGenerating = false.obs;
@@ -26,16 +29,41 @@ class ChatController extends GetxController {
   LlmBackend? _backend;
 
   LlmBackend get backend {
-    if (_backend != null) return _backend!;
-    _backend = _buildBackend(activeBackendId.value);
-    return _backend!;
+    // Always read the observable, even when cached, so an Obx that uses this
+    // getter stays subscribed after its first build.
+    final id = activeBackendId.value;
+    return _backend ??= _backendFactory?.call(id) ?? _buildBackend(id);
+  }
+
+  @override
+  void onInit() {
+    super.onInit();
+    final saved = _storage.getString('active_backend');
+    if (['laptop', 'cloud', 'anthropic', 'local'].contains(saved)) {
+      activeBackendId.value = saved!;
+    }
+    for (final raw in _storage.loadMessages()) {
+      try {
+        messages.add(ChatMessage.fromJson(raw));
+      } catch (_) {
+        // A malformed old record must not prevent the rest from loading.
+      }
+    }
   }
 
   LlmBackend _buildBackend(String id) {
     switch (id) {
       case 'laptop':
+        // Prefer the paired node: the scanned QR carries host, port and token.
+        final pair = _storage.loadPair();
+        if (pair != null) {
+          return LaptopNodeBackend(baseUrl: pair.baseUrl, token: pair.token);
+        }
         final url = _storage.getString('laptop_node_url') ?? '';
-        return LaptopNodeBackend(baseUrl: url);
+        return LaptopNodeBackend(
+          baseUrl: url,
+          token: _storage.getString('pair_token'),
+        );
       case 'local':
         return LocalInferenceBackend();
       case 'anthropic':
@@ -47,8 +75,8 @@ class ChatController extends GetxController {
         return OpenAiCompatibleBackend(
           id: 'cloud',
           displayName: 'OpenAI-compatible',
-          baseUrl:
-              _storage.getString('cloud_base_url') ?? 'https://api.openai.com/v1',
+          baseUrl: _storage.getString('cloud_base_url') ??
+              'https://api.openai.com/v1',
           apiKey: _storage.getString('cloud_key') ?? '',
           defaultModel: _storage.getString('cloud_model'),
         );
@@ -57,8 +85,12 @@ class ChatController extends GetxController {
 
   /// Disposes and rebuilds the backend for the current [activeBackendId].
   Future<void> rebuildBackend() async {
-    await _backend?.dispose();
-    _backend = _buildBackend(activeBackendId.value);
+    _generation++;
+    isGenerating.value = false;
+    streamingText.value = '';
+    final old = _backend;
+    _backend = null;
+    await old?.dispose();
   }
 
   /// Finds a working laptop node before the user's first message fails.
@@ -66,27 +98,35 @@ class ChatController extends GetxController {
   ///   1. the saved URL (last known good node)
   ///   2. web: the node that served this page, then host:8765, then loopback
   ///   3. native: LAN discovery (UDP broadcast + subnet scan)
-  ///   4. native fallback: http://127.0.0.1:8765 (adb reverse over USB)
   Future<void> autoDiscoverNode() async {
     if (activeBackendId.value != 'laptop') return;
+    if (_storage.loadPair() != null) return;
+    final generation = _generation;
     final saved = _storage.getString('laptop_node_url');
     if (saved != null && saved.isNotEmpty) {
       final test = LaptopNodeBackend(baseUrl: saved);
       final h = await test.health();
-      if (h != null && h['ok'] == true) return; // saved URL still works
+      await test.dispose();
+      if (h != null) {
+        return; // The node may be reachable before loading a model.
+      }
     }
     String? url;
 
     if (kIsWeb) {
       // Browsers can't broadcast or scan. But when the node serves this app
       // itself, our own origin IS the node address.
-      final candidates = <String>[if (Uri.base.port == NodeDiscovery.nodePort) Uri.base.origin];
+      final candidates = <String>[
+        if (Uri.base.port == NodeDiscovery.nodePort) Uri.base.origin
+      ];
       final host = Uri.base.host.isEmpty ? '127.0.0.1' : Uri.base.host;
       candidates.add('${Uri.base.scheme}://$host:${NodeDiscovery.nodePort}');
       candidates.add('http://127.0.0.1:${NodeDiscovery.nodePort}');
       for (final c in candidates) {
-        final h = await LaptopNodeBackend(baseUrl: c).health();
-        if (h != null && h['ok'] == true) {
+        final candidate = LaptopNodeBackend(baseUrl: c);
+        final h = await candidate.health();
+        await candidate.dispose();
+        if (h != null) {
           url = c;
           break;
         }
@@ -95,26 +135,24 @@ class ChatController extends GetxController {
       final nodes = await NodeDiscovery().discover();
       if (nodes.isNotEmpty) {
         url = 'http://${nodes.first['address']}:${nodes.first['port']}';
-      } else {
-        const usb = 'http://127.0.0.1:8765';
-        final test = LaptopNodeBackend(baseUrl: usb);
-        final h = await test.health();
-        if (h != null && h['ok'] == true) url = usb;
       }
     }
 
-    if (url != null) {
-      await _storage.setString('laptop_node_url', url);
+    if (url != null &&
+        generation == _generation &&
+        !isClosed &&
+        activeBackendId.value == 'laptop') {
+      await _storage.selectNode(url);
       await rebuildBackend();
     }
   }
 
   Future<void> switchBackend(String id) async {
     if (id == activeBackendId.value) return;
-    await _backend?.dispose();
-    _backend = null;
     activeBackendId.value = id;
-    await _storage.setString('active_backend', id);
+    final saved = _storage.setString('active_backend', id);
+    await rebuildBackend();
+    await saved;
     error.value = null;
   }
 
@@ -122,47 +160,62 @@ class ChatController extends GetxController {
     if (text.trim().isEmpty || isGenerating.value) return;
     error.value = null;
     messages.add(ChatMessage(role: 'user', content: text.trim()));
-    _persist();
-
+    final generation = ++_generation;
+    final current = backend;
     isGenerating.value = true;
     streamingText.value = '';
     final buffer = StringBuffer();
     try {
-      await backend.ensureReady();
-      final model = await backend.currentModel();
-      await for (final chunk in backend.chat(
+      await _persist();
+      await current.ensureReady();
+      final model = await current.currentModel();
+      if (generation != _generation || isClosed) return;
+      await for (final chunk in current.chat(
         messages.toList(),
         systemPrompt: _storage.getString('system_prompt'),
       )) {
+        if (generation != _generation || isClosed) return;
         buffer.write(chunk.delta);
         streamingText.value = buffer.toString();
         if (chunk.done) break;
       }
+      if (generation != _generation || isClosed) return;
       messages.add(ChatMessage(
         role: 'assistant',
         content: buffer.toString(),
-        backend: backend.displayName,
+        backend: current.displayName,
         model: model,
       ));
-      _persist();
+      await _persist();
     } catch (e) {
-      error.value = '$e';
+      if (generation == _generation && !isClosed) error.value = '$e';
     } finally {
-      isGenerating.value = false;
-      streamingText.value = '';
+      if (generation == _generation && !isClosed) {
+        isGenerating.value = false;
+        streamingText.value = '';
+      }
     }
   }
 
   Future<void> clearChat() async {
+    final cancelling = rebuildBackend();
     messages.clear();
+    error.value = null;
     await _storage.clearMessages();
+    await cancelling;
   }
 
-  void _persist() =>
+  Future<void> stopGeneration() async {
+    if (!isGenerating.value) return;
+    await rebuildBackend();
+  }
+
+  Future<void> _persist() =>
       _storage.saveMessages(messages.map((m) => m.toJson()).toList());
 
   @override
   void onClose() {
+    _generation++;
     _backend?.dispose();
     super.onClose();
   }

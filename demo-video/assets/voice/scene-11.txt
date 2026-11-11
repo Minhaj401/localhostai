@@ -1,0 +1,1 @@
+Open Models and choose a GGUF. The library shows its size, quantization, and whether it’s installed.

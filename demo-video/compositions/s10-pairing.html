@@ -1,0 +1,107 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s10-pairing{left:192px;width:520px}
+    #s10-connect-copy{position:absolute;left:24px;right:24px;top:100px}
+    #s10-modes{position:absolute;left:24px;right:24px;top:188px;display:flex}
+    #s10-modes .s10-mode{flex:1;min-height:60px;padding:12px 0;border:0;border-bottom:2px solid #2E2E35;border-radius:0;background:transparent;color:#A1A1AA}
+    #s10-modes .s10-mode.selected{border-bottom-color:#5CF26A;color:#FFF}
+    #s10-qr-frame{position:absolute;left:160px;top:264px;width:196px;height:196px;padding:6px;border:2px solid #5CF26A;border-radius:16px;background:#FFF}
+    #s10-qr{display:block;width:100%;height:100%;object-fit:contain}
+    #s10-scan-help{position:absolute;left:24px;right:24px;bottom:20px}
+    #s10-connection{position:absolute;left:724px;top:552px;width:48px;height:40px}
+    #s10-server{left:784px;width:944px}
+    #s10-coordinator-heading{position:absolute;left:32px;right:32px;top:100px}
+    #s10-coordinator-card{position:absolute;left:32px;right:32px;top:164px}
+    #s10-status-row{display:flex;align-items:center;gap:12px;min-height:44px}
+    #s10-server-icon{margin-left:auto;color:#A1A1AA}
+    #s10-laptop-name{margin-top:8px;color:#FFF}
+    #s10-endpoint{margin-top:8px;min-height:60px;padding:8px 16px;font:500 28px/1.35 'JetBrains Mono',monospace;color:#FFF}
+    #s10-choose-model{display:flex;width:100%;margin-top:12px}
+    #s10-server-actions{display:flex;align-items:center;gap:24px;margin-top:8px}
+    #s10-server-actions .ui-button{min-height:44px;padding:4px 0;font-size:28px}
+  </style>
+  <div id="root" data-composition-id="s10" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s10-title" class="headline" data-var-text="s10-title">Scan and connect</h1>
+      <p id="s10-demo-label" class="example-note">Recreated UI · sample data</p>
+
+      <!-- Two source-screen crops show the scan and its connected result. -->
+      <div id="s10-pairing" class="ui-stage">
+        <div id="s10-pairing-topbar" class="ui-topbar">
+          <div class="ui-page-title">Connect laptop</div>
+        </div>
+        <p id="s10-connect-copy" class="ui-description">One code connects chat, models, and compute sharing.</p>
+        <div id="s10-modes" role="tablist" aria-label="Pairing method">
+          <span id="s10-scan-tab" class="ui-button s10-mode selected" role="tab" aria-selected="true">Scan QR</span>
+          <span id="s10-manual-tab" class="ui-button s10-mode" role="tab" aria-selected="false">Enter details</span>
+        </div>
+        <div id="s10-qr-frame">
+          <img id="s10-qr" src="assets/brand/demo-qr.svg" alt="Illustrative laptop pairing QR code">
+        </div>
+        <p id="s10-scan-help" class="ui-description">On the laptop, press Ctrl+P and point this camera at the code.</p>
+      </div>
+
+      <svg id="s10-connection" viewBox="0 0 48 40" aria-hidden="true">
+        <path class="line-accent" d="M4 20H42M30 8L42 20L30 32"/>
+      </svg>
+
+      <div id="s10-server" class="ui-stage">
+        <div id="s10-server-topbar" class="ui-topbar">
+          <div class="ui-page-title">Server</div>
+          <i class="icon i-refresh muted" role="img" aria-label="Refresh server"></i>
+        </div>
+        <h2 id="s10-coordinator-heading" class="ui-section-title">Your local coordinator</h2>
+        <div id="s10-coordinator-card" class="ui-card">
+          <div id="s10-status-row">
+            <span id="s10-online-dot" class="status-dot" aria-hidden="true"></span>
+            <h3 id="s10-online-status" class="ui-card-title">Online / no model</h3>
+            <i id="s10-server-icon" class="icon i-server" aria-hidden="true"></i>
+          </div>
+          <p id="s10-laptop-name" class="ui-description">Laptop</p>
+          <div id="s10-endpoint" class="ui-input">
+            <span class="muted" aria-hidden="true">$</span>
+            <span id="s10-server-address">http://192.168.1.10:8765</span>
+          </div>
+          <div id="s10-choose-model" class="ui-button"><i class="icon i-play" aria-hidden="true"></i>Choose a model</div>
+          <div id="s10-server-actions">
+            <span id="s10-pairing-action" class="ui-button ghost"><i class="icon i-link" aria-hidden="true"></i>Pairing</span>
+            <span id="s10-nearby-action" class="ui-button ghost"><i class="icon i-wifi" aria-hidden="true"></i>Nearby laptops</span>
+            <span id="s10-pool-action" class="ui-button ghost"><i class="icon i-cpu" aria-hidden="true"></i>Compute pool</span>
+          </div>
+        </div>
+        <div id="s10-navigation" class="ui-nav">
+          <span class="ui-nav-item"><i class="icon i-chat" aria-hidden="true"></i>Chat</span>
+          <span class="ui-nav-item"><i class="icon i-box" aria-hidden="true"></i>Models</span>
+          <span class="ui-nav-item active" aria-current="page"><i class="icon i-server" aria-hidden="true"></i>Server</span>
+          <span class="ui-nav-item"><i class="icon i-settings" aria-hidden="true"></i>Settings</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s10-title", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.1);
+    tl.fromTo("#s10-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 0.28);
+    tl.fromTo("#s10-pairing", { opacity: 0, scale: 1.035 }, { opacity: 1, scale: 1, duration: 0.72, ease: "power4.out" }, 0.18);
+    tl.fromTo("#s10-pairing-topbar, #s10-connect-copy", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power3.out" }, 0.72);
+    tl.fromTo("#s10-modes", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 1.05);
+    tl.fromTo("#s10-qr-frame", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.58, ease: "power4.out" }, 1.3);
+    tl.fromTo("#s10-scan-help", { opacity: 0, filter: "blur(5px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.22, ease: "power3.out" }, 1.82);
+    tl.set("#s10-connection .line-accent", { strokeDasharray: 58, strokeDashoffset: 58 }, 2.25);
+    tl.fromTo("#s10-connection", { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.8, ease: "power2.inOut" }, 2.28);
+    tl.fromTo("#s10-connection .line-accent", { strokeDashoffset: 58 }, { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut" }, 2.28);
+    tl.fromTo("#s10-server", { opacity: 0, scale: 1.025 }, { opacity: 1, scale: 1, duration: 0.72, ease: "power4.out" }, 2.92);
+    tl.fromTo("#s10-server-topbar, #s10-coordinator-heading", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power3.out" }, 3.42);
+    tl.fromTo("#s10-coordinator-card", { opacity: 0, clipPath: "inset(0 0 100% 0)" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.62, ease: "power3.out" }, 3.78);
+    tl.fromTo("#s10-online-dot", { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 0.28, ease: "back.out(1.4)" }, 4.32);
+    tl.fromTo("#s10-online-status, #s10-laptop-name, #s10-endpoint", { opacity: 0, filter: "blur(5px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.26, ease: "power3.out" }, 4.42);
+    tl.fromTo("#s10-choose-model", { opacity: 0, clipPath: "inset(0 100% 0 0)" }, { opacity: 1, clipPath: "inset(0 0% 0 0)", duration: 0.55, ease: "power3.out" }, 5.02);
+    tl.fromTo("#s10-server-actions, #s10-navigation", { opacity: 0 }, { opacity: 1, duration: 0.34, ease: "power3.out" }, 5.38);
+
+    window.__timelines["s10"] = tl;
+  </script>
+</template>

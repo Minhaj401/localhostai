@@ -5,10 +5,19 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Release signing is read from android/key.properties, which is gitignored.
+// Without it (a fresh clone) the build falls back to debug signing so
+// `flutter build apk` still works, but a shipped APK must use the real key.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
     namespace = "com.privatelm.privatelm_lan"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+    ndkVersion = "26.1.10909125"
 
     // Extract native libs to disk so the bundled RPC worker binary is
     // executable from nativeLibraryDir (required on Android 10+).
@@ -32,17 +41,36 @@ android {
         applicationId = "com.privatelm.privatelm_lan"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        minSdk = 24
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Every advertised ABI must contain Flutter and the bundled worker.
+        // Scanner dependencies otherwise introduce partial 32-bit/x86 ABIs.
+        ndk {
+            abiFilters.clear()
+            abiFilters.add("arm64-v8a")
+        }
+    }
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                keyAlias = keystoreProperties["keyAlias"]
+                keyPassword = keystoreProperties["keyPassword"]
+                storeFile = file(keystoreProperties["storeFile"])
+                storePassword = keystoreProperties["storePassword"]
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            signingConfig = keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug
+            minifyEnabled = false
+            shrinkResources = false
         }
     }
 }

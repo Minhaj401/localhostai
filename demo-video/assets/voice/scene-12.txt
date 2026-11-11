@@ -1,0 +1,1 @@
+In Server, enable Share this phone. The foreground notification gives you a Stop sharing control.

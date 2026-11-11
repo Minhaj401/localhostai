@@ -1,0 +1,57 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s16-question{position:absolute;right:34px;top:104px;padding:20px 26px;background:#16161A;border:2px solid #2E2E35;border-radius:20px;font:400 32px/1.35 Outfit}
+    #s16-new-chat::before{content:'\f45e'}
+    #s16-speaker{position:absolute;left:42px;top:200px;display:flex;align-items:center;gap:14px;font:500 32px/1.2 Outfit}
+    #s16-speaker img{width:42px;height:42px;object-fit:contain}
+    #s16-answer{position:absolute;left:42px;top:256px;right:72px;font:400 36px/1.3 Outfit;color:#FFF;max-width:1180px}
+    #s16-model{position:absolute;left:32px;bottom:196px}
+    #s16-composer{position:absolute;left:32px;right:32px;bottom:108px;border-radius:24px;background:#101012}
+    #s16-send{margin-left:auto;background:#5CF26A;color:#000;width:50px;height:50px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+    #s16-caret{display:inline-block;width:5px;height:38px;background:#5CF26A;vertical-align:-6px;margin-left:6px}
+    .s16-answer-mask{display:inline-block;overflow:hidden;vertical-align:bottom}
+    .s16-answer-phrase{display:inline-block}
+  </style>
+  <div id="root" data-composition-id="s16" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s16-title" class="headline" data-var-text="s16-title">One model across your devices</h1>
+      <p class="example-note">Recreated UI · sample data</p>
+      <div id="s16-chat" class="ui-stage">
+        <div class="ui-topbar">
+          <div class="ui-brand"><span>localhost<span class="accent">.ai</span></span></div>
+          <i id="s16-new-chat" class="icon muted" role="img" aria-label="New chat"></i>
+        </div>
+        <div id="s16-question">Explain local AI in one sentence.</div>
+        <div id="s16-speaker"><img src="assets/brand/mark.svg" alt=""><span>localhost.ai</span></div>
+        <div id="s16-answer"><span class="s16-answer-mask" data-layout-allow-overflow><span id="s16-answer-a" class="s16-answer-phrase">Local AI runs the model</span></span> <span class="s16-answer-mask" data-layout-allow-overflow><span id="s16-answer-b" class="s16-answer-phrase">on your own devices,</span></span> <span class="s16-answer-mask" data-layout-allow-overflow><span id="s16-answer-c" class="s16-answer-phrase">keeping this conversation on your local network.</span></span><span id="s16-caret"></span></div>
+        <div id="s16-model" class="ui-badge active"><span class="status-dot"></span>Qwen 2.5 7B Instruct</div>
+        <div id="s16-composer" class="ui-input"><span>Message localhost.ai</span><span id="s16-send" aria-label="Stop generating"><i class="icon i-stop"></i></span></div>
+        <div class="ui-nav">
+          <span class="ui-nav-item active"><i class="icon i-chat"></i>Chat</span>
+          <span class="ui-nav-item"><i class="icon i-box"></i>Models</span>
+          <span class="ui-nav-item"><i class="icon i-server"></i>Server</span>
+          <span class="ui-nav-item"><i class="icon i-settings"></i>Settings</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s16-title", { opacity: 0, x: 52 }, { opacity: 1, x: 0, duration: 0.58, ease: "power4.out" }, 0.14);
+    tl.fromTo("#s16-chat", { opacity: 0 }, { opacity: 1, duration: 0.42, ease: "power3.out" }, 0.38);
+    tl.fromTo("#s16-question", { opacity: 0, scale: 0.96, transformOrigin: "right top" }, { opacity: 1, scale: 1, transformOrigin: "right top", duration: 0.48, ease: "power3.out" }, 0.78);
+    tl.fromTo("#s16-speaker", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.42, ease: "power3.out" }, 1.38);
+    tl.fromTo("#s16-answer-a", { yPercent: 110 }, { yPercent: 0, duration: 0.42, ease: "power3.out" }, 1.9);
+    tl.fromTo("#s16-answer-b", { yPercent: 110 }, { yPercent: 0, duration: 0.42, ease: "power3.out" }, 2.35);
+    tl.fromTo("#s16-answer-c", { yPercent: 110 }, { yPercent: 0, duration: 0.52, ease: "power3.out" }, 2.8);
+    tl.fromTo("#s16-caret", { opacity: 0, scaleY: 0, transformOrigin: "bottom center" }, { opacity: 1, scaleY: 1, transformOrigin: "bottom center", duration: 0.24, ease: "power3.out" }, 3.45);
+    tl.fromTo("#s16-model", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.4, ease: "power3.out" }, 3.9);
+    tl.fromTo("#s16-composer", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.46, ease: "power3.out" }, 4.32);
+    tl.fromTo("#s16-send", { scale: 0.82 }, { scale: 1, duration: 0.32, ease: "back.out(1.4)" }, 5.0);
+
+    window.__timelines["s16"] = tl;
+  </script>
+</template>

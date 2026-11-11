@@ -1,0 +1,103 @@
+<template>
+  <link rel="stylesheet" href="assets/video.css">
+  <style>
+    #root{position:absolute;inset:0}
+    #s14-time-label{left:192px;right:auto}
+    #s14-coordinator-title{position:absolute;left:32px;right:32px;top:100px}
+    #s14-server-card{position:absolute;left:32px;right:32px;top:164px;padding:20px}
+    #s14-state-row{display:flex;align-items:center;gap:16px}
+    #s14-state-dot{width:16px;height:16px}
+    #s14-server-icon{margin-left:auto;color:#5CF26A}
+    #s14-identity{display:flex;align-items:center;gap:24px;margin-top:8px}
+    #s14-laptop-name{flex:none}
+    #s14-endpoint{flex:1;min-width:0;font:400 28px/1.35 'JetBrains Mono',monospace;color:#FFF}
+    #s14-address{white-space:nowrap}
+    #s14-copy{margin-left:auto;color:#A1A1AA}
+    #s14-copy::before{content:'\f252'}
+    #s14-model-name{margin-top:8px;font:500 32px/1.25 'JetBrains Mono',monospace;color:#FFF}
+    #s14-stop{display:flex;width:100%;margin-top:12px;padding:12px 26px}
+    #s14-links{display:flex;align-items:center;gap:32px;margin-top:4px}
+    #s14-links .ui-button{padding:6px 0;min-height:54px}
+    .s14-transient-card{position:absolute;left:32px;right:32px;top:164px;padding:20px}
+    .s14-transient-row{display:flex;align-items:center;gap:16px}
+    .s14-transient-copy{margin:12px 0;color:#A1A1AA;font:400 28px/1.35 Outfit,sans-serif}
+    #s14-load-action{display:flex;width:100%;margin-top:12px}
+    #s14-loading-line{height:6px;margin-top:18px;background:#2E2E35;overflow:hidden}
+    #s14-loading-fill{width:100%;height:100%;background:#5CF26A;transform-origin:left center}
+  </style>
+  <div id="root" data-composition-id="s14" data-width="1920" data-height="1080" data-duration="7.5">
+    <div class="scene">
+      <h1 id="s14-title" class="headline" data-var-text="s14-title">Load the model</h1>
+      <p id="s14-time-label" class="example-note">Demo loading time compressed</p>
+      <p id="s14-demo-label" class="example-note">Recreated UI · sample data</p>
+      <!-- Final ready pose. The scene duration is not a measured loading time. -->
+      <div id="s14-server" class="ui-stage">
+        <div id="s14-topbar" class="ui-topbar">
+          <div id="s14-page-title" class="ui-page-title">Server</div>
+          <i id="s14-refresh" class="icon i-refresh muted" role="img" aria-label="Refresh server"></i>
+        </div>
+        <h2 id="s14-coordinator-title" class="ui-section-title">Your local coordinator</h2>
+        <div id="s14-load-state" class="ui-card s14-transient-card">
+          <p class="s14-transient-copy">Qwen 2.5 7B Instruct</p>
+          <span id="s14-load-action" class="ui-button">Load model</span>
+        </div>
+        <div id="s14-loading-state" class="ui-card s14-transient-card">
+          <div class="s14-transient-row">
+            <span class="status-dot" aria-hidden="true"></span>
+            <h3 class="ui-section-title">Loading model</h3>
+          </div>
+          <p class="s14-transient-copy">Qwen 2.5 7B Instruct</p>
+          <div id="s14-loading-line" aria-label="Loading model"><div id="s14-loading-fill"></div></div>
+        </div>
+        <div id="s14-server-card" class="ui-card">
+          <div id="s14-state-row">
+            <span id="s14-state-dot" class="status-dot" aria-hidden="true"></span>
+            <h3 id="s14-state" class="ui-section-title">Running</h3>
+            <i id="s14-server-icon" class="icon i-server" aria-hidden="true"></i>
+          </div>
+          <div id="s14-identity">
+            <span id="s14-laptop-name" class="ui-card-title">Laptop</span>
+            <div id="s14-endpoint" class="ui-input">
+              <span class="muted" aria-hidden="true">$</span>
+              <span id="s14-address">http://192.168.1.10:8765</span>
+              <i id="s14-copy" class="icon" role="img" aria-label="Copy server address"></i>
+            </div>
+          </div>
+          <p id="s14-model-name">Qwen 2.5 7B Instruct</p>
+          <span id="s14-stop" class="ui-button secondary"><i class="icon i-stop" aria-hidden="true"></i>Stop model</span>
+          <div id="s14-links">
+            <span id="s14-pairing" class="ui-button ghost"><i class="icon i-link" aria-hidden="true"></i>Pairing</span>
+            <span id="s14-nearby" class="ui-button ghost"><i class="icon i-wifi" aria-hidden="true"></i>Nearby laptops</span>
+            <span id="s14-pool-link" class="ui-button ghost"><i class="icon i-cpu" aria-hidden="true"></i>Compute pool</span>
+          </div>
+        </div>
+        <nav id="s14-nav" class="ui-nav" aria-label="Main navigation">
+          <span id="s14-nav-chat" class="ui-nav-item"><i class="icon i-chat" aria-hidden="true"></i>Chat</span>
+          <span id="s14-nav-models" class="ui-nav-item"><i class="icon i-box" aria-hidden="true"></i>Models</span>
+          <span id="s14-nav-server" class="ui-nav-item active" aria-current="page"><i class="icon i-server" aria-hidden="true"></i>Server</span>
+          <span id="s14-nav-settings" class="ui-nav-item"><i class="icon i-settings" aria-hidden="true"></i>Settings</span>
+        </nav>
+      </div>
+    </div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#s14-title", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.46, ease: "power3.out" }, 0.16);
+    tl.fromTo("#s14-time-label, #s14-demo-label", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out", stagger: 0.08 }, 0.3);
+    tl.fromTo("#s14-server", { opacity: 0 }, { opacity: 1, duration: 0.45, ease: "power3.out" }, 0.44);
+    tl.fromTo("#s14-load-action", { scale: 1, backgroundColor: "#5CF26A" }, { scale: 0.97, backgroundColor: "#8BFF95", duration: 0.13, ease: "power2.in" }, 1.35);
+    tl.fromTo("#s14-load-action", { scale: 0.97, backgroundColor: "#8BFF95" }, { scale: 1, backgroundColor: "#5CF26A", duration: 0.2, ease: "power3.out", immediateRender: false }, 1.48);
+    tl.fromTo("#s14-load-state", { opacity: 1 }, { opacity: 0, duration: 0.22, ease: "power2.in" }, 2.12);
+    tl.fromTo("#s14-loading-state", { opacity: 0 }, { opacity: 1, duration: 0.24, ease: "power3.out" }, 2.28);
+    tl.fromTo("#s14-loading-fill", { scaleX: 0, transformOrigin: "left center" }, { scaleX: 1, transformOrigin: "left center", duration: 1.18, ease: "power2.inOut" }, 2.42);
+    tl.fromTo("#s14-loading-state", { opacity: 1 }, { opacity: 0, duration: 0.22, ease: "power2.in", immediateRender: false }, 3.92);
+    tl.fromTo("#s14-server-card", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power3.out" }, 4.06);
+    tl.fromTo("#s14-state-row", { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.42, ease: "power3.out" }, 4.24);
+    tl.fromTo("#s14-model-name", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.24, ease: "power4.out" }, 4.68);
+    tl.fromTo("#s14-stop", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.38, ease: "power3.out" }, 4.98);
+    tl.fromTo("#s14-links", { opacity: 0 }, { opacity: 1, duration: 0.36, ease: "power3.out" }, 5.42);
+
+    window.__timelines["s14"] = tl;
+  </script>
+</template>

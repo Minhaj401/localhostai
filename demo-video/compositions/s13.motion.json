@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s13-title", "bySec": 0.5 },
+    { "kind": "appearsBy", "selector": "#s13-pool", "bySec": 1.2 },
+    { "kind": "before", "a": "#s13-context", "b": "#s13-preview" },
+    { "kind": "before", "a": "#s13-preview", "b": "#s13-laptop-fill" },
+    { "kind": "before", "a": "#s13-laptop-fill", "b": "#s13-laptop-count" },
+    { "kind": "before", "a": "#s13-phone-fill", "b": "#s13-phone-count" },
+    { "kind": "staysInFrame", "selector": "#s13-pool" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

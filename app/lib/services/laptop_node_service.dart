@@ -10,9 +10,22 @@ import '../models/chat_message.dart';
 /// (or entered manually). The heavy inference runs on the laptop's
 /// CPU/GPU; the phone only relays the stream.
 class LaptopNodeBackend extends LlmBackend {
-  LaptopNodeBackend({required this.baseUrl});
+  LaptopNodeBackend({required String baseUrl, this.token, http.Client? client})
+      : baseUrl = baseUrl.trim().replaceFirst(RegExp(r'/+$'), ''),
+        _http = client ?? http.Client();
 
   final String baseUrl; // e.g. http://192.168.1.20:8765
+  final http.Client _http;
+
+  /// Pair token from the scanned QR. Required when the node enforces pairing,
+  /// otherwise every request is rejected with 401.
+  final String? token;
+
+  Map<String, String> get _authHeaders => {
+        'Content-Type': 'application/json',
+        if (token != null && token!.isNotEmpty)
+          'Authorization': 'Bearer $token',
+      };
   String? _model;
   Map<String, dynamic>? _health;
 
@@ -27,7 +40,9 @@ class LaptopNodeBackend extends LlmBackend {
 
   Future<Map<String, dynamic>?> health() async {
     try {
-      final r = await http.get(Uri.parse('$baseUrl/health')).timeout(const Duration(seconds: 4));
+      final r = await _http
+          .get(Uri.parse('$baseUrl/health'), headers: _authHeaders)
+          .timeout(const Duration(seconds: 4));
       if (r.statusCode == 200) {
         _health = jsonDecode(r.body) as Map<String, dynamic>;
         return _health;
@@ -37,17 +52,23 @@ class LaptopNodeBackend extends LlmBackend {
     return null;
   }
 
-  List<String> get models =>
-      (_health?['models'] as List?)?.cast<String>() ?? const [];
+  List<String> get models => ((_health?['models'] as List?) ?? const [])
+      .map((m) => m is String ? m : (m is Map ? m['id'] : null))
+      .whereType<String>()
+      .toList();
 
   @override
   Future<void> ensureReady() async {
     final h = await health();
-    if (h == null || h['ok'] != true) {
+    if (h == null) {
       throw StateError(
-          'Laptop node unreachable — start it on the laptop: '
-          'cd laptop-node && ./run.sh, then tap the laptop icon to pick a node');
+          'Cannot reach the laptop. Run privateml on it, then pair from the home screen.');
     }
+    if (h['ok'] != true) {
+      throw StateError('The laptop is connected but has no model loaded. '
+          'Open its terminal model picker, select a model, and press Enter.');
+    }
+    if (_model != null && !models.contains(_model)) _model = null;
     _model ??= models.isNotEmpty ? models.first : null;
   }
 
@@ -74,10 +95,16 @@ class LaptopNodeBackend extends LlmBackend {
     final request = http.Request(
       'POST',
       Uri.parse('$baseUrl/v1/chat/completions'),
-    )..headers['Content-Type'] = 'application/json';
+    )
+      ..headers['Content-Type'] = 'application/json'
+      ..headers.addAll({
+        if (token != null && token!.isNotEmpty)
+          'Authorization': 'Bearer $token',
+      });
     request.body = jsonEncode(body);
 
-    final response = await request.send().timeout(const Duration(seconds: 300));
+    final response =
+        await _http.send(request).timeout(const Duration(seconds: 300));
     if (response.statusCode >= 400) {
       final detail = await response.stream.bytesToString();
       throw StateError('Node error ${response.statusCode}: $detail');
@@ -86,5 +113,5 @@ class LaptopNodeBackend extends LlmBackend {
   }
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async => _http.close();
 }

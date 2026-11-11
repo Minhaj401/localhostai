@@ -1,28 +1,56 @@
 package com.privatelm.privatelm_lan
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import java.net.InetSocketAddress
-import java.net.Socket
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 class MainActivity : FlutterActivity() {
+    private var workerStopCallback: (() -> Unit)? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "privatelm/native")
-            .setMethodCallHandler { call, result ->
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "privatelm/native")
+        workerStopCallback = { channel.invokeMethod("stopSharing", null) }
+        WorkerKeepAliveService.onStop = workerStopCallback
+        channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     // Bundled rpc-server lives here (extracted, executable).
                     "nativeLibDir" -> result.success(applicationInfo.nativeLibraryDir)
+                    "cacheDir" -> result.success(cacheDir.absolutePath)
+                    "workerLogDir" -> result.success(filesDir.absolutePath)
+                    "startWorkerProtection" -> {
+                        WorkerKeepAliveService.start(this) { error ->
+                            if (error == null) {
+                                result.success(null)
+                                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 50052)
+                                }
+                            } else result.error("worker_protection", error.message, null)
+                        }
+                    }
+                    "trackWorker" -> {
+                        try {
+                            WorkerKeepAliveService.track(call.argument<Int>("pid")!!)
+                            result.success(null)
+                        } catch (error: Exception) { result.error("worker_protection", error.message, null) }
+                    }
+                    "clearWorker" -> {
+                        call.argument<Int>("pid")?.let { WorkerKeepAliveService.clear(it) }
+                        result.success(null)
+                    }
+                    "stopWorkerProtection" -> WorkerKeepAliveService.stop(this) { result.success(null) }
                     // LAN IP for showing the worker address.
                     "localIp" -> {
                         try {
-                            val s = Socket()
-                            s.connect(InetSocketAddress("8.8.8.8", 80), 1000)
-                            val ip = s.localAddress.hostAddress
-                            s.close()
-                            result.success(ip)
+                            result.success(lanAddress())
                         } catch (e: Exception) {
                             result.success(null)
                         }
@@ -30,5 +58,39 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (WorkerKeepAliveService.onStop === workerStopCallback) {
+            WorkerKeepAliveService.onStop = null
+            WorkerKeepAliveService.stop(this) { }
+        }
+        workerStopCallback = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    private fun lanAddress(): String? {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        // Prefer LAN interfaces even when Android routes Internet traffic over
+        // cellular. No Internet connection or main-thread socket is needed.
+        val networks = manager.allNetworks.filter { network ->
+            val capabilities = manager.getNetworkCapabilities(network)
+            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true &&
+                (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                 capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true)
+        }
+        for (network in networks) {
+            val address = manager.getLinkProperties(network)?.linkAddresses
+                ?.map { it.address }
+                ?.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }
+            if (address != null) return address.hostAddress
+        }
+        return NetworkInterface.getNetworkInterfaces()?.toList()
+            ?.filter { it.isUp && !it.isLoopback && !it.isPointToPoint &&
+                (it.name.startsWith("wlan") || it.name.startsWith("swlan") ||
+                 it.name.startsWith("ap") || it.name.startsWith("eth") || it.name.startsWith("en")) }
+            ?.flatMap { it.inetAddresses.toList() }
+            ?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }
+            ?.hostAddress
     }
 }

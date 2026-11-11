@@ -1,0 +1,30 @@
+{
+  "$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
+  "registry": "https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry",
+  "paths": {
+    "blocks": "compositions",
+    "components": "compositions/components",
+    "assets": "assets"
+  },
+  "media": {
+    "autoProxy": true
+  },
+  "authoringSkill": "hyperframes",
+  "registryItems": [
+    {
+      "name": "browser-device-stage",
+      "type": "hyperframes:component",
+      "target": "references/registry/browser-device-stage.html.txt"
+    },
+    {
+      "name": "code-terminal-run",
+      "type": "hyperframes:component",
+      "target": "references/registry/code-terminal-run.html.txt"
+    },
+    {
+      "name": "flowchart",
+      "type": "hyperframes:block",
+      "target": "references/registry/flowchart.html.txt"
+    }
+  ]
+}

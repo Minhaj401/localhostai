@@ -2,6 +2,7 @@
 # Builds llama.cpp with RPC support on the laptop (one-time, ~5-15 min).
 # RPC is what lets model layers be split across laptop + phone memory.
 set -euo pipefail
+mkdir -p "$HOME/tools"
 cd "$HOME/tools"
 [ -d llama.cpp ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp
 cd llama.cpp

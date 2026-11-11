@@ -1,0 +1,12 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s12-title", "bySec": 0.5 },
+    { "kind": "appearsBy", "selector": "#s12-server", "bySec": 1.0 },
+    { "kind": "before", "a": "#s12-sharing-card", "b": "#s12-sharing-switch" },
+    { "kind": "before", "a": "#s12-sharing-switch", "b": "#s12-notification" },
+    { "kind": "before", "a": "#s12-notification", "b": "#s12-stop-sharing" },
+    { "kind": "staysInFrame", "selector": "#s12-server" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

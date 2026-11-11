@@ -1,125 +1,280 @@
-# PrivateLM
+<p align="center">
+  <img src="app/assets/logo/lockup.png" alt="localhost.ai — Run AI Locally" width="640">
+</p>
 
-**Your laptop and your phone, one private LLM.** No cloud, no Python, no
-config files to hand-edit. Two things to install: this binary and the app.
+<h1 align="center">Your laptop. Your phone. One private AI.</h1>
 
-```
-  ┌──────────────────────────────┐            ┌──────────────────────────┐
-  │  privateml  (this binary)    │   LAN HTTP │  PrivateLM APK (phone)   │
-  │                              │ ◄───────── │  chat UI                 │
-  │  chat UI in your terminal    │            │  + compute worker        │
-  │  + embedded node:            │            │    (libggmlrpc.so)       │
-  │      HTTP API, discovery,    │            │                          │
-  │      engine management       │ ─────────► │  layer split over RPC    │
-  └───────────┬──────────────────┘            └──────────────────────────┘
-              │
-        Ollama / llama.cpp already on your machine
-```
+<p align="center">
+  Run language models on your own hardware.<br>
+  Start on your laptop, bring in your phone when you need more memory,<br>
+  and choose the models you actually want to use.
+</p>
 
-The laptop node is **not a service you run**. It is a task inside the
-`privateml` process, so `privateml` gives you a chat UI *and* makes this
-machine available to your phone at the same time.
+<p align="center">
+  <a href="https://github.com/Minhaj401/localhostai/actions/workflows/ci.yml"><img src="https://github.com/Minhaj401/localhostai/actions/workflows/ci.yml/badge.svg" alt="Project checks"></a>
+  <a href="https://github.com/Minhaj401/localhostai/releases"><img src="https://img.shields.io/github/v/release/Minhaj401/localhostai?color=5CF26A&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5CF26A" alt="MIT license"></a>
+  <a href="Cargo.toml"><img src="https://img.shields.io/badge/coordinator-Rust-DEA584" alt="Rust coordinator"></a>
+  <a href="app"><img src="https://img.shields.io/badge/app-Flutter-54C5F8" alt="Flutter app"></a>
+</p>
 
-## Quick start
+<p align="center">
+  <a href="#see-it-in-action"><strong>Watch the demo</strong></a> ·
+  <a href="#get-started"><strong>Get started</strong></a> ·
+  <a href="https://github.com/Minhaj401/localhostai/releases/latest"><strong>Download</strong></a> ·
+  <a href="PROJECT_GUIDE.md"><strong>Technical guide</strong></a>
+</p>
+
+---
+
+**localhost.ai** combines a Rust terminal application, an embedded LAN coordinator, and a Flutter Android app into one local inference system. Your laptop runs the model; an optional worker inside the phone app can hold and compute the layers that need additional room.
+
+**One laptop executable. One Android APK. Your choice of GGUF models.** No account or separate Ollama installation is required. The laptop executable is named `privateml`.
+
+## See it in action
+
+A two-minute walkthrough: the memory-sharing architecture first, then pairing, model selection, phone sharing, placement, and chat.
+
+https://github.com/user-attachments/assets/6f2a5b14-06e1-474b-8840-e677ec2a468c
+
+<sub>1080p · English narration and captions · The interface walkthrough and allocation values are illustrative, not a live benchmark. The current app also includes the custom model browser shown below.</sub>
+
+## Built around your devices
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Make room for a bigger model</h3>
+      <p>Place model layers and their KV cache across laptop and phone memory. The planner keeps as much as possible on the laptop and uses remote workers for the remainder.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Your models, your choice</h3>
+      <p>Search Hugging Face, open a repository, or paste a GGUF link. Choose your quantization, download complete shard sets, and keep a persistent local model library.</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>One integrated workflow</h3>
+      <p>The Rust TUI manages downloads, pairing, planning, and inference. The Android app handles mobile chat, model controls, and its bundled ARM64 compute worker.</p>
+    </td>
+    <td valign="top">
+      <h3>Keep local chat local</h3>
+      <p>Prompts stay on your devices and LAN in managed mode. No telemetry, account, or required cloud backend. External cloud providers are an explicit settings choice.</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>Know what will fit</h3>
+      <p>See context size, layer placement, available RAM, and memory shortfall before loading. Only enabled, compatible, reachable workers contribute capacity.</p>
+    </td>
+    <td valign="top">
+      <h3>Connect with your existing tools</h3>
+      <p>An OpenAI-compatible chat API exposes streaming inference over the LAN. Use the terminal, phone, or a compatible client against the same coordinator.</p>
+    </td>
+  </tr>
+</table>
+
+## A focused interface
+
+Black canvas, a single green accent, readable terminal controls, and an adaptive Flutter layout. Chat, model management, and server controls share one coordinator state.
+
+<p align="center">
+  <img src="docs/assets/chat.png" alt="Android chat screen with the local model ready" width="30%">
+  &nbsp;
+  <img src="docs/assets/models.png" alt="Android model library with the Find and download models action" width="30%">
+  &nbsp;
+  <img src="docs/assets/server.png" alt="Android coordinator screen with status, pairing, and compute pool controls" width="30%">
+</p>
+
+<p align="center"><sub>Chat · Models · Server<br>Actual application UI rendered with illustrative coordinator data.</sub></p>
+
+## How the memory sharing works
+
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="A Rust coordinator manages the local model and serves the TUI and Android chat app. The laptop computes local layers and exchanges remote layer tensors with the phone's bundled RPC worker over the LAN." width="100%">
+</p>
+
+1. **Inspect the model.** Read GGUF transformer and attention metadata; count every shard and estimate weights plus context-dependent KV memory.
+2. **Plan against available RAM.** Keep OS and application reserves, fill the laptop first, and place the remaining whole layers on opted-in workers.
+3. **Load the selected placement.** PrivateLM starts its pinned llama.cpp runtime and connects to the phone's bundled RPC worker.
+4. **Stream the answer.** The model executes across the selected devices; the coordinator returns incremental text to your client.
+
+The benefit is **additional usable memory**. Wi-Fi, device CPUs, and the chosen split determine latency; adding a phone is not a promise of faster generation. Plans use physical RAM, not swap capacity, and remain estimates rather than enforced memory quotas.
+
+## Get started
+
+### 1. Start the laptop
+
+Download the **Linux x86_64 terminal binary** from [Releases](https://github.com/Minhaj401/localhostai/releases/latest), or build from source on a supported platform:
 
 ```bash
-cargo build --release
-./target/release/privateml
+git clone https://github.com/Minhaj401/localhostai.git
+cd localhostai
+cargo build --release --locked
+./target/release/privateml --require-pairing
 ```
 
-That's it. It:
+Choose a starter model and press **Enter**. PrivateLM installs the pinned runtime, resumes and verifies the GGUF download, checks placement, and starts chat. Use **↑ → B** to browse other models.
 
-1. creates `~/.privateml/` (config + pair token) on first run
-2. detects Ollama or llama.cpp already running on this machine
-3. starts the LAN node on the first free port at or above 8765
-4. opens the chat UI
-
-Chat with your laptop alone, or open the phone app and it appears in the
-node list automatically.
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `privateml` | node + interactive chat UI |
-| `privateml --status` | print address, backend, models, pairing — then exit |
-| `privateml --headless` | node only, no UI (SSH, systemd, servers) |
-| `privateml --once "hello"` | one streamed reply, then exit |
-| `privateml --port 9000` | force the listen port |
-| `privateml --name "studio"` | name shown on the phone |
-| `privateml --require-pairing` | make the pair token mandatory |
-| `privateml --no-lan` | loopback only, phone cannot connect |
-| `privateml --no-discovery` | don't answer UDP broadcasts |
-
-In the UI: type → **Enter** to send · **↑** model picker · **Esc** to quit.
-
-## Files
-
-```
-~/.privateml/config.toml   settings (node_name, port, engine, ...)
-~/.privateml/pair_token    shared secret the phone must present
-~/.privateml/models/       downloaded GGUF models
-~/.privateml/logs/
-```
-
-## Node API
-
-OpenAI-compatible, so any client that speaks `chat/completions` works:
-
-```
-GET  /health              status, backend, models  (public)
-GET  /v1/models           model list
-POST /v1/chat/completions streaming (SSE) or not
-GET  /pair                token for the QR code
-POST /pair/verify         confirm a token
-```
-
-With `require_pairing = true` every `/v1` request needs
-`Authorization: Bearer <pair_token>`.
+<details>
+<summary><strong>Use the prebuilt Linux binary</strong></summary>
 
 ```bash
-curl -X POST localhost:8765/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"qwen2.5:0.5b","stream":true,
-       "messages":[{"role":"user","content":"hi"}]}'
+curl -fL -o privateml \
+  https://github.com/Minhaj401/localhostai/releases/latest/download/privateml-linux-x86_64
+chmod +x privateml
+./privateml --require-pairing
 ```
 
-## Engines
+The prebuilt binary requires OpenSSL 3 and a compatible Linux system. Release assets include SHA-256 checksums. For other supported laptop platforms, build from source.
 
-The node uses whatever is already on the machine, in this order:
+</details>
 
-1. **managed** — a llama-server PrivateLM started itself
-2. **ollama** — auto-detected on `127.0.0.1:11434`
-3. **llamacpp** — auto-detected on `127.0.0.1:8080`
+### 2. Pair the phone
 
-Override in `config.toml` with `engine` and `ollama_url` / `llamacpp_url`.
+Install **`localhostai-android-arm64.apk`** from [Releases](https://github.com/Minhaj401/localhostai/releases/latest). Connect both devices to the same LAN, press **Ctrl+P** on the laptop, and scan the QR through **Server → Pair laptop** in the app.
 
-## Distributed mode
+### 3. Choose how to run
 
-Model layers and KV cache split across laptop and phone RAM, so a model
-bigger than either device can hold still runs. The APK ships an ARM64
-`rpc-server` as `libggmlrpc.so`; switching on **"Share this phone's
-compute"** makes the phone a peer. Latency is bounded by Wi-Fi; the win is
-memory.
+- **Laptop only:** load a fitting model and chat from the terminal or phone.
+- **Shared memory:** enable **Share this phone** in Server, then preview and reload the model. Inspect device participation with **Ctrl+D** on the laptop.
+- **Bring your own model:** open **Models → Find and download models** on Android, or **↑ → B** in the TUI.
 
-## Repository layout
+Phone sharing is opt-in on the phone and independently controllable from the laptop.
 
+## Choose the model you need
+
+The five starter Qwen models provide a convenient first run. **They are not a model allowlist.**
+
+| Source | Workflow |
+| --- | --- |
+| Hugging Face search | Search a model name, open a repository, and choose a GGUF variant. |
+| Exact repository | Enter `owner/repository` to browse its quantizations. |
+| Direct GGUF link | Paste a file URL, including a Hugging Face `blob` or `resolve` link. |
+| Existing local file | Place a GGUF in `~/.privateml/models/` and restart, or register its path with the API. |
+| Private or gated repository | Obtain access on Hugging Face and provide `HF_TOKEN` to the laptop coordinator. |
+
+Hugging Face selections resolve to immutable revisions and use published checksums when available. Complete split GGUFs are grouped into one download. Interrupted downloads stay available for retry; installed custom models survive restarts and are checked before loading.
+
+Downloads are stored on the laptop, under `~/.privateml/models/`. Downloading a model and loading it are separate actions, so you can prepare your library ahead of time.
+
+## Engineering beneath the interface
+
+| Area | Implementation |
+| --- | --- |
+| Coordinator | Rust, Tokio, managed native processes, and an embedded HTTP API. |
+| Terminal | Ratatui, streamed chat, model browser, context previews, QR pairing, and resource controls. |
+| Android | Flutter, Riverpod connection state, GoRouter navigation, and a bundled ARM64 worker. |
+| Inference | Pinned llama.cpp `b12110`, direct laptop CPU execution, and remote layer placement over RPC. |
+| Downloads | Resumable transfers, range validation, checksums, atomic completion, and serialized installation. |
+| Reliability | Worker sessions, ordered heartbeats, idle protocol checks, failure monitoring, and per-run logs. |
+
+The coordinator avoids probing a worker's single-client RPC socket during an active run. Restarted workers invalidate old allocations, interrupted streams cannot become completed replies, and managed inference processes stop with their owner.
+
+<details>
+<summary><strong>Repository map</strong></summary>
+
+```text
+core/           Embedded Rust coordinator, model installer, planner, and API
+tui/            privateml terminal application
+app/            Flutter Android app and bundled native worker
+phone-rpc/      Native worker lifecycle wrapper and build configuration
+scripts/        Runtime, inference, and worker verification tools
+demo-video/     Editable source for the narrated project demo
+docs/           Operations guide and README showcase assets
 ```
-core/          privateml-core — the node, as a library
-  config.rs    config.toml, dirs, pair token, port selection
-  discovery.rs UDP responder + probe (phone finds this machine)
-  server.rs    HTTP node: health, models, SSE chat, pairing
-  api.rs       client used by the UI and tests
-tui/           privateml — the binary: UI + node wiring
-app/           Flutter APK (chat UI + compute worker)
-laptop-node/   legacy Python node — superseded by core/, kept for reference
-phone-rpc/     legacy Termux script — superseded by the in-APK worker
-scripts/       llama.cpp build helpers
+
+The retained `laptop-node/` Python prototype is a legacy reference. The normal product runs through the Rust coordinator.
+
+</details>
+
+## OpenAI-compatible API
+
+Point compatible clients at `http://<laptop>:8765/v1`. With pairing enabled, use the token supplied by the coordinator.
+
+```bash
+curl http://localhost:8765/v1/chat/completions \
+  -H "Authorization: Bearer $PRIVATELM_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5-1.5b-instruct-q4_k_m",
+    "stream": true,
+    "messages": [{"role": "user", "content": "Explain local AI in one sentence."}]
+  }'
 ```
 
-## Privacy
+<details>
+<summary><strong>CLI commands and terminal shortcuts</strong></summary>
 
-- History and settings live only on your machines.
-- Laptop mode: prompts never leave your LAN.
-- Pairing tokens are generated from `/dev/urandom`, stored `0600`.
-- No telemetry, no accounts, no cloud unless you configure a cloud backend.
+| Command | Purpose |
+| --- | --- |
+| `privateml` | Start the embedded node and interactive terminal. |
+| `privateml --require-pairing` | Require the pairing token for LAN chat and controls. |
+| `privateml --headless` | Run the coordinator without the TUI. |
+| `privateml --status` | Inspect the node and active backend. |
+| `privateml --connect http://HOST:PORT` | Attach to an existing coordinator. |
+| `privateml --connect http://HOST:PORT --once "Hello"` | Stream one reply from a loaded model. |
+| `privateml --no-lan` | Restrict the node to loopback. |
+
+**Enter** send · **↑** models · **B** browse inside the picker · **←/→** context · **I** install only · **Ctrl+D** devices · **Ctrl+P** pair · **Ctrl+A** activity · **Ctrl+X** stop · **F1** help
+
+Model browse, download, and resume endpoints always require the pairing token. See the [operations guide](docs/OPERATIONS.md) for configuration and the full endpoint list.
+
+</details>
+
+## Platform support and boundaries
+
+| Platform | Current support |
+| --- | --- |
+| Linux x86_64 | Rust TUI/coordinator; prebuilt binary; automatic managed runtime. |
+| Linux ARM64 | Source build; automatic managed runtime. |
+| macOS Intel / Apple Silicon | Source build; managed runtime downloads. |
+| Android ARM64, Android 7+ | Flutter app with bundled RPC worker. |
+
+Use a **trusted LAN**: coordinator HTTP and raw RPC traffic are not encrypted. Model/runtime downloads contact their hosting services; managed prompts remain local. The phone hosts remote layers and still needs the laptop coordinator. GGUF architecture support depends on the pinned runtime; raw safetensors and standalone phone inference are not supported by this workflow.
+
+The current distributed path uses CPU workers. Memory pressure, a force-stop, or network loss can interrupt a run; restore sharing and reload the model to recover. The TUI does not yet persist chat history. See [current limitations](PROJECT_GUIDE.md#current-limitations) for the complete picture.
+
+## Verification you can reproduce
+
+The current local verification pass covers **114 Rust tests** and **66 Flutter tests**, strict static checks, release builds, real CPU/RPC verification from the project's reliability pass, and custom-download interruption/resume/restart checks. Native RPC integration uses loopback workers as phone stand-ins; it is separate from physical Android testing.
+
+```bash
+# From the repository root
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --locked
+python3 scripts/check-runtime.py
+```
+
+```bash
+# From app/
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release --target-platform android-arm64
+```
+
+The [GitHub Actions workflow](.github/workflows/ci.yml) runs Rust and Flutter checks on pushes and pull requests. For native inference, placement, reloads, worker-loss recovery, and cleanup, use [`scripts/check-inference.py`](scripts/check-inference.py) with an existing GGUF and matching runtime. Android release builds use JDK 17; see [app build instructions](app/README.md#build-and-check).
+
+## Explore, contribute, build
+
+- **[Technical guide](PROJECT_GUIDE.md):** architecture, protocols, API, planning, and troubleshooting.
+- **[Operations guide](docs/OPERATIONS.md):** commands, configuration, models, and distributed mode.
+- **[Android development](app/README.md):** build, signing, assets, and worker setup.
+- **[Contributing](CONTRIBUTING.md):** development checks and useful ways to help.
+- **[Issues](https://github.com/Minhaj401/localhostai/issues):** report a reproducible problem or suggest an improvement.
+
+## Acknowledgments
+
+Built on [llama.cpp](https://github.com/ggml-org/llama.cpp), [Flutter](https://flutter.dev), [Tokio](https://tokio.rs), and [Ratatui](https://ratatui.rs). Starter model weights come from [Qwen](https://huggingface.co/Qwen); their licenses are published with each catalog entry. The demo was built with [HyperFrames](https://hyperframes.heygen.com). Outfit and JetBrains Mono font licenses ship with the app.
+
+Project source is licensed under [MIT](LICENSE). Downloaded models and bundled third-party components retain their respective licenses.
+
+---
+
+<p align="center">
+  <strong>Run AI locally. Make more of the hardware you already own.</strong><br>
+  Built by <a href="https://github.com/Minhaj401">Minhaj Noushad</a>.
+</p>

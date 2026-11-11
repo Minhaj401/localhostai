@@ -6,8 +6,7 @@
 //!   privateml://pair?h=192.168.1.20&p=8765&t=<token>&n=<name>
 //!
 //! Rendering is done with half-blocks (▀ ▄ █) so a QR still scans from a
-//! terminal at a readable width. The encoder here is a small, spec-following
-//! byte-mode QR writer — no external dependency, no network call.
+//! terminal at a readable width. Encoding uses the maintained qrcode crate.
 
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +38,7 @@ impl PairPayload {
             "privateml://pair?h={}&p={}&t={}&n={}",
             url_encode(&self.host),
             self.port,
-            self.token,
+            url_encode(&self.token),
             url_encode(&self.name)
         )
     }
@@ -53,7 +52,7 @@ impl PairPayload {
         let mut name = String::new();
         for kv in rest.split('&') {
             let (k, v) = kv.split_once('=')?;
-            let v = url_decode(v);
+            let v = url_decode(v)?;
             match k {
                 "h" => host = Some(v),
                 "p" => port = v.parse().ok(),
@@ -62,10 +61,16 @@ impl PairPayload {
                 _ => {}
             }
         }
+        let host = host?;
+        let port = port?;
+        let token = token?;
+        if host.trim().is_empty() || token.is_empty() || port == 0 {
+            return None;
+        }
         Some(Self {
-            host: host?,
-            port: port?,
-            token: token?,
+            host,
+            port,
+            token,
             name,
         })
     }
@@ -84,22 +89,22 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-fn url_decode(s: &str) -> String {
+fn url_decode(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%' {
+            let hi = (*b.get(i + 1)? as char).to_digit(16)?;
+            let lo = (*b.get(i + 2)? as char).to_digit(16)?;
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+            continue;
         }
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
-    String::from_utf8_lossy(&out).to_string()
+    String::from_utf8(out).ok()
 }
 
 // ------------------------------------------------------------------ QR core
@@ -132,7 +137,11 @@ pub fn render_terminal(grid: &[Vec<bool>], quiet: usize) -> Vec<String> {
             return false;
         }
         let (yy, xx) = (y - quiet, x - quiet);
-        if yy < n && xx < n { grid[yy][xx] } else { false }
+        if yy < n && xx < n {
+            grid[yy][xx]
+        } else {
+            false
+        }
     };
 
     let mut lines = Vec::new();
@@ -174,6 +183,25 @@ mod tests {
         assert_eq!(back.host, "fe80::1");
         assert_eq!(back.name, "a b");
         assert_eq!(back.token, "t k");
+    }
+
+    #[test]
+    fn reserved_token_characters_roundtrip() {
+        let p = PairPayload::new("10.0.0.2", 8765, "a+b&c=%你好", "node");
+        assert_eq!(PairPayload::parse(&p.uri()), Some(p));
+    }
+
+    #[test]
+    fn malformed_payloads_are_rejected_without_panicking() {
+        for uri in [
+            "privateml://pair?h=%界&p=8765&t=x",
+            "privateml://pair?h=%FF&p=8765&t=x",
+            "privateml://pair?h=host&p=0&t=x",
+            "privateml://pair?h=&p=8765&t=x",
+            "privateml://pair?h=host&p=8765&t=",
+        ] {
+            assert!(PairPayload::parse(uri).is_none(), "{uri}");
+        }
     }
 
     #[test]

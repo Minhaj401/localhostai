@@ -1,0 +1,1 @@
+A larger local AI model needs more memory than your laptop has available. What now?

@@ -1,0 +1,13 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s01-title", "bySec": 0.9 },
+    { "kind": "appearsBy", "selector": "#s01-laptop", "bySec": 1.3 },
+    { "kind": "before", "a": "#s01-laptop", "b": "#s01-laptop-layers .s01-layer" },
+    { "kind": "before", "a": "#s01-laptop-layers .s01-layer", "b": "#s01-pending-layers .s01-layer" },
+    { "kind": "before", "a": "#s01-pending-layers .s01-layer", "b": "#s01-overflow-count" },
+    { "kind": "staysInFrame", "selector": "#s01-laptop" },
+    { "kind": "staysInFrame", "selector": "#s01-overflow" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s04-title", "bySec": 0.95 },
+    { "kind": "appearsBy", "selector": "#s04-laptop", "bySec": 1.3 },
+    { "kind": "before", "a": "#s04-paired-state", "b": "#s04-pair-link" },
+    { "kind": "before", "a": "#s04-pair-link", "b": "#s04-phone" },
+    { "kind": "before", "a": "#s04-phone", "b": "#s04-share-thumb" },
+    { "kind": "before", "a": "#s04-share-thumb", "b": "#s04-worker" },
+    { "kind": "staysInFrame", "selector": "#s04-laptop" },
+    { "kind": "staysInFrame", "selector": "#s04-phone" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}

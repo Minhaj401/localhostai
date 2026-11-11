@@ -26,3 +26,20 @@
 
 # Build artifacts
 *.apk
+
+# Credentials and machine-local state
+.env
+.env.*
+*.jks
+*.keystore
+*.pem
+*.key
+key.properties
+
+# Generated knowledge graph and video review artifacts
+/graphify-out/
+/demo-video/boards/
+/demo-video/.thumbnails/
+/demo-video/.waveform-cache/
+/demo-video/.media/
+/docs/assets/.previews/

@@ -1,0 +1,42 @@
+{
+  "brand": "localhost.ai",
+  "version": "0.2.2 / build 7",
+  "example": true,
+  "exampleLabel": "Illustrative example",
+  "demoLabel": "Recreated UI · sample data",
+  "loadLabel": "Demo loading time compressed",
+  "model": {
+    "id": "qwen2.5-7b-instruct-q3_k_m",
+    "name": "Qwen 2.5 7B Instruct",
+    "quantization": "Q3_K_M",
+    "size": "3.55 GB",
+    "layers": 28,
+    "context": 4096,
+    "installed": true
+  },
+  "allocation": {
+    "laptopLayers": 25,
+    "phoneLayers": 3,
+    "laptopEstimatedMiB": 3443,
+    "phoneEstimatedMiB": 414,
+    "phoneReserveMiB": 900,
+    "rpcHeadroomMiB": 256
+  },
+  "coordinator": {
+    "name": "Laptop",
+    "endpoint": "http://192.168.1.10:8765",
+    "command": "privateml --require-pairing",
+    "pairShortcut": "Ctrl+P",
+    "state": "Running"
+  },
+  "phone": {
+    "name": "This phone",
+    "sharing": true,
+    "notification": "localhost.ai is sharing compute",
+    "notificationAction": "Stop sharing"
+  },
+  "chat": {
+    "question": "Explain local AI in one sentence.",
+    "answer": "Local AI runs the model on your own devices, keeping this conversation on your local network."
+  }
+}

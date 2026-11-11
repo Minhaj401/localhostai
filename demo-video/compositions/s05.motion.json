@@ -1,0 +1,14 @@
+{
+  "duration": 7.5,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#s05-title", "bySec": 0.8 },
+    { "kind": "appearsBy", "selector": "#s05-phone-shell", "bySec": 1.3 },
+    { "kind": "before", "a": "#s05-chip", "b": "#s05-cutaway-top" },
+    { "kind": "before", "a": "#s05-cutaway-top", "b": "#s05-os" },
+    { "kind": "before", "a": "#s05-os", "b": "#s05-rpc" },
+    { "kind": "before", "a": "#s05-rpc", "b": "#s05-usable" },
+    { "kind": "before", "a": "#s05-usable", "b": "#s05-reachable" },
+    { "kind": "staysInFrame", "selector": "#s05-stage" },
+    { "kind": "keepsMoving", "withinSelector": ".scene", "maxStaticSec": 2.2 }
+  ]
+}
