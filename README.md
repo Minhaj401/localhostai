@@ -126,7 +126,7 @@ chmod +x privateml
 ./privateml --require-pairing
 ```
 
-The prebuilt binary requires OpenSSL 3 and a compatible Linux system. Release assets include SHA-256 checksums. For other supported laptop platforms, build from source.
+The prebuilt binary requires glibc 2.39+ and OpenSSL 3, as provided by Ubuntu 24.04 and compatible distributions. Release assets include SHA-256 checksums. For older Linux systems or other supported laptop platforms, build from source.
 
 </details>
 
