@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="https://local-host-ai.vercel.app"><strong>Website</strong></a> ·
   <a href="#see-it-in-action"><strong>Watch the demo</strong></a> ·
   <a href="#get-started"><strong>Get started</strong></a> ·
   <a href="https://github.com/Minhaj401/localhostai/releases/latest"><strong>Download</strong></a> ·
