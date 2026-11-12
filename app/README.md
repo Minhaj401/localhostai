@@ -3,7 +3,7 @@
 **Run AI Locally.** A dark, terminal-native Flutter client for the existing LAN
 coordinator and bundled ARM64 llama.cpp RPC worker.
 
-1. Run `privateml --require-pairing` on the laptop, choose/install a model in
+1. Run `localhostai --require-pairing` on the laptop, choose/install a model in
    its picker, and press **Ctrl+P**.
 2. Open **Server → Pair laptop** and scan the coordinator's QR.
 3. Use **Models → Find and download models** to search Hugging Face, enter a
@@ -28,7 +28,8 @@ The worker reports a fresh RAM sample after startup and stores llama.cpp's
 eligible weight cache in Android's private cache directory. Android can evict
 that cache; it contains model weights, not prompts or chat history.
 
-Version `0.2.2+7` adds CPU/Wi-Fi locks tied to the foreground sharing service,
+Version `0.2.3+8` adds a coordinator-IP RPC gate, secure credential storage,
+thermal/battery safeguards, and CPU/Wi-Fi locks tied to the foreground sharing service,
 cleanup when the app process exits, and sequenced worker-session reports.
 Android can still terminate a worker under memory pressure or on a force-stop.
 An exited/restarted worker has lost its model buffers: enable sharing again and

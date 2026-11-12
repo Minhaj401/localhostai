@@ -15,6 +15,10 @@ pub struct Metadata {
     pub params_b: Option<f64>,
     pub split_no: Option<u64>,
     pub split_count: Option<u64>,
+    pub layer_bytes: Vec<u64>,
+    pub coordinator_bytes: u64,
+    pub metadata_bytes: u64,
+    pub max_context: Option<u32>,
 }
 
 pub fn inspect(path: &Path) -> Result<Metadata> {
@@ -60,6 +64,7 @@ pub fn inspect(path: &Path) -> Result<Metadata> {
             || key.ends_with(".attention.head_count_kv")
             || key.ends_with(".attention.key_length")
             || key.ends_with(".attention.value_length")
+            || key.ends_with(".context_length")
         {
             if let Some(number) = reader.number(kind)? {
                 numbers.insert(key, number);
@@ -93,15 +98,22 @@ pub fn inspect(path: &Path) -> Result<Metadata> {
     if alignment == 0 || !alignment.is_power_of_two() || alignment > 4096 {
         bail!("GGUF tensor alignment is invalid");
     }
-    let mut tensors = Vec::with_capacity(tensor_count.min(1_000_000) as usize);
+    let mut tensors = Vec::with_capacity(tensor_count.min(100_000) as usize);
+    let mut names = std::collections::HashSet::new();
+    let mut layer_bytes = vec![0u64; layers as usize];
+    let mut coordinator_bytes = 0u64;
     for _ in 0..tensor_count {
-        let _name = reader.string(4096)?;
+        let name = reader.string(4096)?;
+        if !names.insert(name.clone()) {
+            bail!("GGUF tensor names must be unique");
+        }
         let dimensions = reader.u32()?;
-        if dimensions == 0 || dimensions > 8 {
+        if dimensions == 0 || dimensions > 4 {
             bail!("GGUF tensor dimensions are invalid");
         }
         let mut elements = 1u128;
-        for _ in 0..dimensions {
+        let mut row = 0u64;
+        for index in 0..dimensions {
             let dimension = reader.u64()?;
             if dimension == 0 {
                 bail!("GGUF tensor has an empty dimension");
@@ -109,21 +121,42 @@ pub fn inspect(path: &Path) -> Result<Metadata> {
             elements = elements
                 .checked_mul(u128::from(dimension))
                 .context("GGUF tensor dimensions overflow")?;
+            if index == 0 {
+                row = dimension;
+            }
         }
         let kind = reader.u32()?;
-        let minimum_bytes = match kind {
-            0 | 26 => elements.checked_mul(4),
-            1 | 25 | 30 => elements.checked_mul(2),
-            24 | 43 => Some(elements),
-            27 | 28 => elements.checked_mul(8),
-            2 | 3 | 6..=23 | 29 | 34 | 35 | 39..=42 => {
-                elements.checked_add(7).map(|value| value / 8)
-            }
-            _ => None,
+        let (block, bytes) =
+            tensor_layout(kind).context("GGUF tensor type is unsupported by the pinned runtime")?;
+        if !row.is_multiple_of(block) {
+            bail!("GGUF quantized tensor row is not aligned to its block size");
         }
-        .and_then(|bytes| u64::try_from(bytes).ok())
-        .context("GGUF tensor type or size is unsupported")?;
-        tensors.push((reader.u64()?, minimum_bytes));
+        let tensor_bytes = elements
+            .checked_div(u128::from(block))
+            .and_then(|blocks| blocks.checked_mul(u128::from(bytes)))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .context("GGUF tensor type or size is unsupported")?;
+        let offset = reader.u64()?;
+        if !offset.is_multiple_of(alignment) {
+            bail!("GGUF tensor offset is not aligned");
+        }
+        tensors.push((offset, tensor_bytes));
+        if let Some(index) = name
+            .strip_prefix("blk.")
+            .and_then(|rest| rest.split('.').next())
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            let bytes = layer_bytes
+                .get_mut(index)
+                .context("GGUF tensor references an invalid transformer block")?;
+            *bytes = bytes
+                .checked_add(tensor_bytes)
+                .context("GGUF block size overflow")?;
+        } else {
+            coordinator_bytes = coordinator_bytes
+                .checked_add(tensor_bytes)
+                .context("GGUF coordinator weight size overflow")?;
+        }
     }
     let tensor_info_end = reader.position()?;
     let data_start = tensor_info_end
@@ -140,6 +173,9 @@ pub fn inspect(path: &Path) -> Result<Metadata> {
     {
         bail!("GGUF tensor data is missing or outside the file");
     }
+    let max_context = get("context_length")
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0);
     Ok(Metadata {
         architecture,
         tensor_count,
@@ -150,6 +186,53 @@ pub fn inspect(path: &Path) -> Result<Metadata> {
             .map(|n| *n as f64 / 1e9),
         split_no: numbers.get("split.no").copied(),
         split_count: numbers.get("split.count").copied(),
+        layer_bytes,
+        coordinator_bytes,
+        metadata_bytes: data_start,
+        max_context,
+    })
+}
+
+/// GGML on-disk layouts from llama.cpp b12110. Runtime-only/deprecated types
+/// are intentionally excluded; block overhead is included in every extent.
+fn tensor_layout(kind: u32) -> Option<(u64, u64)> {
+    Some(match kind {
+        0 => (1, 4),
+        1 => (1, 2),
+        2 => (32, 18),
+        3 => (32, 20),
+        6 => (32, 22),
+        7 => (32, 24),
+        8 => (32, 34),
+        9 => (32, 36),
+        10 => (256, 84),
+        11 => (256, 110),
+        12 => (256, 144),
+        13 => (256, 176),
+        14 => (256, 210),
+        15 => (256, 292),
+        16 => (256, 66),
+        17 => (256, 74),
+        18 => (256, 98),
+        19 => (256, 50),
+        20 => (32, 18),
+        21 => (256, 110),
+        22 => (256, 82),
+        23 => (256, 136),
+        24 => (1, 1),
+        25 => (1, 2),
+        26 => (1, 4),
+        27 | 28 => (1, 8),
+        29 => (256, 56),
+        30 => (1, 2),
+        34 => (256, 54),
+        35 => (256, 66),
+        39 => (32, 17),
+        40 => (64, 36),
+        41 => (128, 18),
+        42 => (64, 18),
+        43 => (1, 1),
+        _ => return None,
     })
 }
 
@@ -330,7 +413,10 @@ fn fixture_with_split(layers: u32, split: Option<(u32, u32)>) -> Vec<u8> {
     }
     let mut bytes = b"GGUF".to_vec();
     bytes.extend_from_slice(&3u32.to_le_bytes());
-    bytes.extend_from_slice(&1u64.to_le_bytes());
+    let tensor_indices: Vec<_> = (0..layers.max(1))
+        .filter(|index| split.is_none_or(|(part, count)| index % count == part))
+        .collect();
+    bytes.extend_from_slice(&(tensor_indices.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&(6u64 + if split.is_some() { 2 } else { 0 }).to_le_bytes());
     string(&mut bytes, "general.architecture");
     bytes.extend_from_slice(&8u32.to_le_bytes());
@@ -358,13 +444,18 @@ fn fixture_with_split(layers: u32, split: Option<(u32, u32)>) -> Vec<u8> {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
     }
-    string(&mut bytes, "weight");
-    bytes.extend_from_slice(&1u32.to_le_bytes());
-    bytes.extend_from_slice(&1u64.to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&0u64.to_le_bytes());
+    for (position, index) in tensor_indices.iter().enumerate() {
+        string(&mut bytes, &format!("blk.{index}.weight"));
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&(position as u64 * 32).to_le_bytes());
+    }
     while !bytes.len().is_multiple_of(32) {
         bytes.push(0);
+    }
+    for _ in 0..tensor_indices.len().saturating_sub(1) {
+        bytes.extend_from_slice(&[0; 32]);
     }
     bytes.extend_from_slice(&0f32.to_le_bytes());
     bytes
@@ -409,7 +500,7 @@ mod tests {
         std::fs::write(&path, fixture(28)).unwrap();
         let metadata = inspect(&path).unwrap();
         assert_eq!(metadata.layers, 28);
-        assert_eq!(metadata.tensor_count, 1);
+        assert_eq!(metadata.tensor_count, 28);
         assert_eq!(metadata.architecture, "qwen2");
         assert_eq!(metadata.kv_bytes_per_token, Some(28 * 2 * 128 * 4));
     }
@@ -447,6 +538,29 @@ mod tests {
         let path = directory.path().join("model.gguf");
         let mut bytes = fixture(28);
         bytes.truncate(bytes.len() - 1);
+        std::fs::write(&path, bytes).unwrap();
+        assert!(inspect(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("tensor data"));
+    }
+
+    #[test]
+    fn rejects_truncated_quantized_blocks_using_exact_type_extents() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("model.gguf");
+        let mut bytes = fixture(1);
+        // The fixture's only tensor descriptor ends 4 bytes before aligned F32
+        // data. Change its dimension/type to one Q4_0 block but leave 4 bytes;
+        // a valid block requires 18 bytes in llama.cpp b12110.
+        let descriptor = bytes
+            .windows("blk.0.weight".len())
+            .position(|window| window == b"blk.0.weight")
+            .unwrap();
+        let after_name = descriptor + "blk.0.weight".len();
+        let dimension = after_name + 4;
+        bytes[dimension..dimension + 8].copy_from_slice(&32u64.to_le_bytes());
+        bytes[dimension + 8..dimension + 12].copy_from_slice(&2u32.to_le_bytes());
         std::fs::write(&path, bytes).unwrap();
         assert!(inspect(&path)
             .unwrap_err()

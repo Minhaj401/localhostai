@@ -25,7 +25,7 @@
   "coordinator": {
     "name": "Laptop",
     "endpoint": "http://192.168.1.10:8765",
-    "command": "privateml --require-pairing",
+    "command": "localhostai --require-pairing",
     "pairShortcut": "Ctrl+P",
     "state": "Running"
   },

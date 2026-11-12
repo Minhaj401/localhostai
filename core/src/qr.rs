@@ -3,7 +3,7 @@
 //! The phone needs three facts to join: address, port, token. We encode them in
 //! one compact URI that the APK parses straight into its "add node" form:
 //!
-//!   privateml://pair?h=192.168.1.20&p=8765&t=<token>&n=<name>
+//!   localhostai://pair?h=192.168.1.20&p=8765&t=<token>&n=<name>
 //!
 //! Rendering is done with half-blocks (▀ ▄ █) so a QR still scans from a
 //! terminal at a readable width. Encoding uses the maintained qrcode crate.
@@ -35,7 +35,7 @@ impl PairPayload {
     /// The string that goes into the QR code.
     pub fn uri(&self) -> String {
         format!(
-            "privateml://pair?h={}&p={}&t={}&n={}",
+            "localhostai://pair?h={}&p={}&t={}&n={}",
             url_encode(&self.host),
             self.port,
             url_encode(&self.token),
@@ -45,7 +45,7 @@ impl PairPayload {
 
     /// Parse a scanned URI back into a payload.
     pub fn parse(uri: &str) -> Option<Self> {
-        let rest = uri.strip_prefix("privateml://pair?")?;
+        let rest = uri.strip_prefix("localhostai://pair?")?;
         let mut host = None;
         let mut port = None;
         let mut token = None;
@@ -194,11 +194,11 @@ mod tests {
     #[test]
     fn malformed_payloads_are_rejected_without_panicking() {
         for uri in [
-            "privateml://pair?h=%界&p=8765&t=x",
-            "privateml://pair?h=%FF&p=8765&t=x",
-            "privateml://pair?h=host&p=0&t=x",
-            "privateml://pair?h=&p=8765&t=x",
-            "privateml://pair?h=host&p=8765&t=",
+            "localhostai://pair?h=%界&p=8765&t=x",
+            "localhostai://pair?h=%FF&p=8765&t=x",
+            "localhostai://pair?h=host&p=0&t=x",
+            "localhostai://pair?h=&p=8765&t=x",
+            "localhostai://pair?h=host&p=8765&t=",
         ] {
             assert!(PairPayload::parse(uri).is_none(), "{uri}");
         }
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn qr_has_finder_patterns() {
-        let g = encode("privateml://pair?h=10.0.0.2&p=8765&t=x&n=y").expect("qr");
+        let g = encode("localhostai://pair?h=10.0.0.2&p=8765&t=x&n=y").expect("qr");
         let n = g.len();
         assert_eq!(g[0].len(), n);
         // Top-left finder: corner dark, inner ring light, center dark.
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn qr_renders_withouth_panic() {
-        let g = encode("privateml://pair?h=127.0.0.1&p=8765&t=deadbeef&n=node").unwrap();
+        let g = encode("localhostai://pair?h=127.0.0.1&p=8765&t=deadbeef&n=node").unwrap();
         let lines = render_terminal(&g, 2);
         assert!(!lines.is_empty());
         assert!(lines[0].len() >= g.len());

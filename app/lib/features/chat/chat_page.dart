@@ -208,7 +208,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       child: Text(
                         node.ready
                             ? '${node.runningModel ?? node.info?.models.firstOrNull ?? 'Model ready'}\n\n>_ type a message below'
-                            : '>_ privateml --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
+                            : '>_ localhostai --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
                         style: mono(13, color: C.text),
                       ))
                   : const NoticeBanner(
@@ -347,6 +347,10 @@ class _Message extends StatelessWidget {
       if (!user && message.backend != null) ...[
         const SizedBox(height: 8),
         Text(message.backend!, style: mono(12)),
+      ],
+      if (!user && message.interrupted) ...[
+        const SizedBox(height: 8),
+        Text('Interrupted response', style: mono(12, color: C.warn)),
       ],
     ]);
     return Semantics(

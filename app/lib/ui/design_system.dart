@@ -19,7 +19,7 @@ export '../widgets/reveal.dart';
 export '../widgets/status_dot.dart';
 export '../widgets/terminal_window.dart';
 
-abstract final class PrivateLmTheme {
+abstract final class LocalhostAiTheme {
   static ThemeData light() => buildTheme();
   static ThemeData dark() => buildTheme();
 }

@@ -1,12 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:privatelm_lan/models/device_profile.dart';
-import 'package:privatelm_lan/models/pairing.dart';
+import 'package:localhostai/models/device_profile.dart';
+import 'package:localhostai/models/pairing.dart';
 
 void main() {
   group('PairPayload', () {
     test('parses the URI the laptop generates', () {
       // Produced by `core/src/qr.rs` — must stay in sync with it.
-      const raw = 'privateml://pair?h=192.168.1.20&p=8765'
+      const raw = 'localhostai://pair?h=192.168.1.20&p=8765'
           '&t=0123456789abcdef0123456789abcdef&n=workstation';
       final p = PairPayload.tryParse(raw);
       expect(p, isNotNull);
@@ -20,11 +20,13 @@ void main() {
     test('rejects foreign QR codes instead of guessing', () {
       expect(PairPayload.tryParse('https://example.com'), isNull);
       expect(PairPayload.tryParse('hello'), isNull);
-      expect(PairPayload.tryParse('privateml://pair?h=1.2.3.4&p=8765'), isNull);
-      expect(PairPayload.tryParse('privateml://pair?h=&p=8765&t=x'), isNull);
       expect(
-          PairPayload.tryParse('privateml://pair?h=a&p=notaport&t=x'), isNull);
-      expect(PairPayload.tryParse('privateml://pair?h=a&p=99999&t=x'), isNull);
+          PairPayload.tryParse('localhostai://pair?h=1.2.3.4&p=8765'), isNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=&p=8765&t=x'), isNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=a&p=notaport&t=x'),
+          isNull);
+      expect(
+          PairPayload.tryParse('localhostai://pair?h=a&p=99999&t=x'), isNull);
     });
 
     test('round trips through toJson/fromJson', () {
@@ -46,11 +48,11 @@ void main() {
 
     test('rejects misleading prefixes and broken percent encodings', () {
       for (final raw in [
-        'privateml://pair.evil?h=host&p=8765&t=x',
-        'privateml://pair/extra?h=host&p=8765&t=x',
-        'privateml://pair?h=%FF&p=8765&t=x',
-        'privateml://pair?h=host&p=0&t=x',
-        'privateml://pair?h=host%2Fpath&p=8765&t=x',
+        'localhostai://pair.evil?h=host&p=8765&t=x',
+        'localhostai://pair/extra?h=host&p=8765&t=x',
+        'localhostai://pair?h=%FF&p=8765&t=x',
+        'localhostai://pair?h=host&p=0&t=x',
+        'localhostai://pair?h=host%2Fpath&p=8765&t=x',
       ]) {
         expect(PairPayload.tryParse(raw), isNull, reason: raw);
       }

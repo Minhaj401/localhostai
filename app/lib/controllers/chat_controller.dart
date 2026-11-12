@@ -10,7 +10,7 @@ import '../services/node_discovery.dart';
 import '../services/storage_service.dart';
 
 /// Builds the active backend from stored settings and owns chat state.
-/// Mirrors PrivateLM's controller layer, with 'laptop' added as a first-class
+/// Mirrors localhost.ai's controller layer, with 'laptop' added as a first-class
 /// backend alongside 'cloud' and 'local'.
 class ChatController extends GetxController {
   ChatController(this._storage, {LlmBackend Function(String)? backendFactory})
@@ -158,8 +158,19 @@ class ChatController extends GetxController {
 
   Future<void> send(String text) async {
     if (text.trim().isEmpty || isGenerating.value) return;
+    final content = text.trim();
+    final context =
+        int.tryParse(_storage.getString('context_tokens') ?? '') ?? 4096;
+    final maximum = activeBackendId.value == 'laptop'
+        ? (context * 3 ~/ 2).clamp(1024, 1024 * 1024)
+        : 1024 * 1024;
+    if (content.length > maximum) {
+      error.value =
+          'This message is too large for the selected context. Shorten it or choose a larger context.';
+      return;
+    }
     error.value = null;
-    messages.add(ChatMessage(role: 'user', content: text.trim()));
+    messages.add(ChatMessage(role: 'user', content: content));
     final generation = ++_generation;
     final current = backend;
     isGenerating.value = true;
@@ -171,7 +182,7 @@ class ChatController extends GetxController {
       final model = await current.currentModel();
       if (generation != _generation || isClosed) return;
       await for (final chunk in current.chat(
-        messages.toList(),
+        _boundedMessages(),
         systemPrompt: _storage.getString('system_prompt'),
       )) {
         if (generation != _generation || isClosed) return;
@@ -188,7 +199,18 @@ class ChatController extends GetxController {
       ));
       await _persist();
     } catch (e) {
-      if (generation == _generation && !isClosed) error.value = '$e';
+      if (generation == _generation && !isClosed) {
+        if (buffer.isNotEmpty) {
+          messages.add(ChatMessage(
+            role: 'assistant',
+            content: buffer.toString(),
+            backend: current.displayName,
+            interrupted: true,
+          ));
+          await _persist();
+        }
+        error.value = '$e';
+      }
     } finally {
       if (generation == _generation && !isClosed) {
         isGenerating.value = false;
@@ -207,7 +229,48 @@ class ChatController extends GetxController {
 
   Future<void> stopGeneration() async {
     if (!isGenerating.value) return;
+    final partial = streamingText.value;
+    final current = _backend;
     await rebuildBackend();
+    if (partial.isNotEmpty) {
+      messages.add(ChatMessage(
+        role: 'assistant',
+        content: partial,
+        backend: current?.displayName,
+        interrupted: true,
+      ));
+      await _persist();
+    }
+  }
+
+  List<ChatMessage> _boundedMessages() {
+    if (activeBackendId.value != 'laptop') return messages.toList();
+    final context =
+        int.tryParse(_storage.getString('context_tokens') ?? '') ?? 4096;
+    // Three UTF-16 characters/token is deliberately conservative for mixed
+    // prose/code/Unicode and leaves roughly 25% for the answer and templates.
+    final budget = (context * 3 * 3 ~/ 4).clamp(1024, 3 * 1024 * 1024);
+    var used = 0;
+    final selected = <ChatMessage>[];
+    for (final message in messages.reversed) {
+      final cost = message.content.length + 32;
+      if (used + cost > budget) {
+        if (selected.isEmpty) {
+          selected.add(ChatMessage(
+            role: message.role,
+            content: message.content
+                .substring(0, budget.clamp(0, message.content.length)),
+            backend: message.backend,
+            model: message.model,
+            interrupted: message.interrupted,
+          ));
+        }
+        break;
+      }
+      selected.add(message);
+      used += cost;
+    }
+    return selected.reversed.toList();
   }
 
   Future<void> _persist() =>

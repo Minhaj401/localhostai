@@ -2,12 +2,12 @@
 
 ## Flutter App Application
 
-This document is the canonical visual source for the PrivateLM Flutter app.
+This document is the canonical visual source for the localhost.ai Flutter app.
 Marketing-only structures such as website navigation, testimonial rows, charts,
 and footers are reference patterns rather than required app screens. The product
 implementation follows these explicit mappings:
 
-- `PrivateLM` replaces the literal OpenCode brand while preserving the
+- `localhost.ai` replaces the literal OpenCode brand while preserving the
   block-pixel ASCII wordmark treatment.
 - JetBrains Mono 400/500/700 is bundled as the licensed Berkeley Mono
   substitute, with broad monospaced fallbacks for multilingual model output.

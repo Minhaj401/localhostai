@@ -77,6 +77,21 @@ void main() {
     expect(node.models.any((m) => m.id == AppFixture.customId), isFalse);
   });
 
+  test('a coordinator restart ends job polling with a resumable error',
+      () async {
+    final fixture = AppFixture();
+    final node = await fixture.createController();
+    addTearDown(node.dispose);
+    final files = await node.client!.browseModels('example/new-model');
+    fixture.intercept = (request) async =>
+        request.url.path == '/managed/jobs/job-1'
+            ? http.Response('{"error":"installation session not found"}', 404)
+            : fixture.respond(request);
+    expect(await node.download(files.models.single), isFalse);
+    expect(node.operationError, contains('coordinator restarted'));
+    expect(node.operationBusy, isFalse);
+  });
+
   test('loading previews before downloading and preserves context in start',
       () async {
     final fixture = AppFixture()..installed = false;
@@ -145,6 +160,22 @@ void main() {
     expect(node.error, isNotNull);
     expect(node.models, same(models));
     expect(node.devices, same(devices));
+  });
+
+  test('optional metadata failure retains a healthy connection and snapshots',
+      () async {
+    final fixture = AppFixture();
+    final node = await fixture.createController();
+    addTearDown(node.dispose);
+    final previousModels = node.models;
+    fixture.intercept = (request) async => request.url.path == '/managed'
+        ? http.Response('{"error":"temporary"}', 503)
+        : fixture.respond(request);
+    await node.refresh();
+    expect(node.connected, isTrue);
+    expect(node.models.map((model) => model.id),
+        previousModels.map((model) => model.id));
+    expect(node.error, contains('temporarily unavailable'));
   });
 
   test('a delayed preview cannot replace a newer context selection', () async {

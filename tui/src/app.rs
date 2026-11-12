@@ -2,8 +2,8 @@
 
 use crate::model_browser::{BrowserAction, ModelBrowser};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use privateml_core::model_hub::ModelSource;
-use privateml_core::SplitPlan;
+use localhostai_core::model_hub::ModelSource;
+use localhostai_core::SplitPlan;
 use ratatui::widgets::ListState;
 use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
@@ -32,6 +32,8 @@ pub struct DeviceRow {
     pub heartbeat_seconds: u64,
     pub assigned_layers: u32,
     pub assigned_memory_mb: u64,
+    pub swap_used_mb: u64,
+    pub pressure_full_avg10: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -90,6 +92,8 @@ impl DeviceRow {
             heartbeat_seconds: v["heartbeat_seconds"].as_u64().unwrap_or(0),
             assigned_layers: v["assigned_layers"].as_u64().unwrap_or(0) as u32,
             assigned_memory_mb: v["assigned_memory_mb"].as_u64().unwrap_or(0),
+            swap_used_mb: v["memory"]["swap_used_mb"].as_u64().unwrap_or(0),
+            pressure_full_avg10: v["memory"]["pressure_full_avg10"].as_f64(),
         }
     }
 }
@@ -140,6 +144,7 @@ pub struct App {
     pub setup_downloaded: u64,
     pub setup_total: u64,
     pub setup_model: Option<String>,
+    pub setup_job: Option<String>,
     pub setup_message: Option<String>,
     pub runtime_ready: bool,
     pub catalog: Vec<CatalogRow>,
@@ -159,7 +164,7 @@ pub struct App {
     pub cluster_label: String,
     pub cluster_state: String,
     pub cluster_model: Option<String>,
-    pub cluster_assignments: Vec<privateml_core::plan::SplitAssignment>,
+    pub cluster_assignments: Vec<localhostai_core::plan::SplitAssignment>,
     pub cluster_error: Option<String>,
     pub cluster_log: Option<String>,
     /// Pairing URI rendered as a QR in the Pairing overlay.
@@ -204,6 +209,7 @@ impl App {
             setup_downloaded: 0,
             setup_total: 0,
             setup_model: None,
+            setup_job: None,
             setup_message: None,
             runtime_ready: false,
             catalog: Vec::new(),
@@ -232,10 +238,25 @@ impl App {
     }
 
     pub fn history(&self) -> Vec<(String, String)> {
-        self.messages
-            .iter()
-            .map(|m| (m.role.clone(), m.content.clone()))
-            .collect()
+        let budget = (self.context_tokens as usize * 3 * 3 / 4).clamp(1024, 3 * 1024 * 1024);
+        let mut used: usize = 0;
+        let mut history = Vec::new();
+        for message in self.messages.iter().rev() {
+            let cost = message.content.len().saturating_add(32);
+            if used.saturating_add(cost) > budget {
+                if history.is_empty() {
+                    history.push((
+                        message.role.clone(),
+                        message.content.chars().take(budget).collect(),
+                    ));
+                }
+                break;
+            }
+            used = used.saturating_add(cost);
+            history.push((message.role.clone(), message.content.clone()));
+        }
+        history.reverse();
+        history
     }
 
     /// Total memory the pool can lend, counting only usable devices.
@@ -401,6 +422,9 @@ impl App {
                 if self.busy {
                     return Action::CancelChat;
                 }
+                if self.setup_busy && self.setup_job.is_some() {
+                    return Action::CancelInstall(self.setup_job.clone().unwrap());
+                }
                 if (self.cluster_starting && !self.setup_busy)
                     || matches!(self.cluster_state.as_str(), "starting" | "running")
                 {
@@ -473,6 +497,30 @@ impl App {
                     }
                     self.overlay = Overlay::Activity;
                     return Action::InstallOnly(model);
+                }
+            }
+            KeyCode::Delete if self.overlay == Overlay::ModelPicker => {
+                if self.setup_busy || self.operation_busy {
+                    return Action::None;
+                }
+                if let Some(model) = self.selected_model_id() {
+                    if self.model.as_deref() == Some(&model)
+                        || self.cluster_model.as_deref() == Some(&model)
+                    {
+                        self.notice = Some("Stop the active model before deleting it".into());
+                    } else if self
+                        .catalog_model(&model)
+                        .is_some_and(|entry| entry.installed)
+                    {
+                        self.overlay = Overlay::Activity;
+                        return Action::DeleteModel(model);
+                    }
+                }
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') if self.overlay == Overlay::ModelPicker => {
+                if !self.setup_busy && !self.operation_busy && self.cluster_state != "running" {
+                    self.overlay = Overlay::Activity;
+                    return Action::ResetRuntime;
                 }
             }
             KeyCode::Enter | KeyCode::Char('D') if self.overlay == Overlay::ModelPicker => {
@@ -599,6 +647,9 @@ pub enum Action {
     },
     StopCluster,
     CancelChat,
+    CancelInstall(String),
+    DeleteModel(String),
+    ResetRuntime,
 }
 
 #[cfg(test)]
@@ -805,5 +856,19 @@ mod tests {
             app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
             Action::StopCluster
         );
+    }
+
+    #[test]
+    fn newest_history_message_is_truncated_to_the_context_budget() {
+        let mut app = App::new(String::new(), String::new());
+        app.context_tokens = 1024;
+        app.messages.push(Msg {
+            role: "user".into(),
+            content: "x".repeat(10_000),
+            tag: None,
+        });
+        let history = app.history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].1.len(), 2304);
     }
 }

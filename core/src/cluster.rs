@@ -46,6 +46,8 @@ pub struct ClusterStatus {
     pub rpc_port: u16,
     pub server_port: u16,
     pub log_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_pid: Option<u32>,
 }
 
 impl Default for ClusterStatus {
@@ -63,6 +65,7 @@ impl Default for ClusterStatus {
             rpc_port: crate::RPC_PORT,
             server_port: 8081,
             log_path: String::new(),
+            server_pid: None,
         }
     }
 }
@@ -75,7 +78,7 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
-    /// Find llama.cpp. Order: explicit override, PrivateLM's own bin dir,
+    /// Find llama.cpp. Order: explicit override, localhost.ai's own bin dir,
     /// then the common dev locations people end up with.
     pub fn discover() -> Option<Self> {
         Self::explicit()
@@ -84,8 +87,8 @@ impl Toolchain {
     }
 
     pub fn explicit() -> Option<Self> {
-        let server = std::env::var("PRIVATELM_LLAMA_SERVER").ok()?;
-        let rpc = std::env::var("PRIVATELM_RPC_SERVER").ok()?;
+        let server = std::env::var("LOCALHOSTAI_LLAMA_SERVER").ok()?;
+        let rpc = std::env::var("LOCALHOSTAI_RPC_SERVER").ok()?;
         let tools = Self {
             llama_server: PathBuf::from(server),
             rpc_server: PathBuf::from(rpc),
@@ -311,8 +314,8 @@ impl Cluster {
         let tools = match self.toolchain() {
             Some(t) => t,
             None => bail!(
-                "llama.cpp not found. PrivateLM needs `llama-server` and `ggml-rpc-server` \
-                 (set PRIVATELM_LLAMA_SERVER / PRIVATELM_RPC_SERVER if they live elsewhere)."
+                "llama.cpp not found. localhost.ai needs `llama-server` and `ggml-rpc-server` \
+                 (set LOCALHOSTAI_LLAMA_SERVER / LOCALHOSTAI_RPC_SERVER if they live elsewhere)."
             ),
         };
         if !model_path.is_file() {
@@ -432,7 +435,10 @@ impl Cluster {
                 return Ok(g.status.clone());
             }
             match cmd.spawn() {
-                Ok(child) => g.server = Some(child),
+                Ok(child) => {
+                    g.status.server_pid = child.id();
+                    g.server = Some(child);
+                }
                 Err(e) => {
                     fail_locked(&mut g, format!("could not start llama-server: {e}")).await;
                     return Ok(g.status.clone());
@@ -444,17 +450,31 @@ impl Cluster {
 
         let endpoint = format!("http://127.0.0.1:{server_port}");
         let client = reqwest::Client::new();
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+        let started = tokio::time::Instant::now();
+        let absolute_deadline = started + std::time::Duration::from_secs(900);
+        let mut progress_deadline = started + std::time::Duration::from_secs(180);
+        let mut log_size = 0;
         loop {
             let status = self.current_status(generation).await?;
             if status.state == ClusterState::Failed {
                 return Ok(status);
             }
-            if tokio::time::Instant::now() >= deadline {
+            let size = std::fs::metadata(&status.log_path)
+                .map(|file| file.len())
+                .unwrap_or(0);
+            if size > log_size {
+                log_size = size;
+                progress_deadline = (tokio::time::Instant::now()
+                    + std::time::Duration::from_secs(180))
+                .min(absolute_deadline);
+            }
+            if tokio::time::Instant::now() >= progress_deadline
+                || tokio::time::Instant::now() >= absolute_deadline
+            {
                 return self
                     .fail(
                         generation,
-                        "llama-server did not become ready in 180s".into(),
+                        "llama-server made no loading progress for 180s or exceeded the 15-minute startup limit".into(),
                     )
                     .await;
             }
@@ -568,6 +588,33 @@ impl Cluster {
     }
 }
 
+pub(crate) fn prune_logs(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut logs: Vec<_> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            name.to_string_lossy().starts_with("cluster-").then(|| {
+                let modified = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (modified, entry.path())
+            })
+        })
+        .collect();
+    logs.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60);
+    for (index, (modified, path)) in logs.into_iter().enumerate() {
+        if index >= 50 || modified < old {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 fn server_command(
     tools: &Toolchain,
     plan: &SplitPlan,
@@ -581,12 +628,6 @@ fn server_command(
         .iter()
         .filter(|assignment| assignment.layers > 0 && assignment.rpc.is_some())
         .collect();
-    let local_layers: u32 = plan
-        .assignments
-        .iter()
-        .filter(|assignment| assignment.rpc.is_none())
-        .map(|assignment| assignment.layers)
-        .sum();
     let remote_layers: u32 = remote.iter().map(|assignment| assignment.layers).sum();
     let peers = remote
         .iter()
@@ -636,11 +677,7 @@ fn server_command(
         // RPC devices use llama.cpp's offload path even when the phone worker
         // itself is CPU-only. Keep non-offloaded layers directly on the laptop
         // CPU instead of routing them through a fragile local RPC connection.
-        let offload = if local_layers == 0 {
-            "999".to_string()
-        } else {
-            remote_layers.saturating_add(1).to_string()
-        };
+        let offload = remote_layers.saturating_add(1).to_string();
         cmd.args([
             "-ngl",
             &offload,
@@ -653,9 +690,9 @@ fn server_command(
             "--tensor-split",
             &weights,
         ]);
-        if local_layers > 0 {
-            cmd.args(["--override-tensor", "^output.*=CPU"]);
-        }
+        // Output weights are included in coordinator memory for every plan.
+        // Keep them on CPU even when every transformer block is remote.
+        cmd.args(["--override-tensor", "^output.*=CPU"]);
     }
     #[cfg(target_os = "linux")]
     kill_if_parent_exits(&mut cmd);
@@ -864,6 +901,7 @@ mod tests {
             size_mb: 2400,
             layers: 36,
             kv_bytes_per_token: 1,
+            ..Default::default()
         };
         let hw = Hardware::from_raw("a", "a", "laptop", 16000, 8, "x86_64");
         let p = crate::plan::plan(&m, &[(hw, None)], 4096);
@@ -882,6 +920,7 @@ mod tests {
             size_mb: 1000,
             layers: 10,
             kv_bytes_per_token: 0,
+            ..Default::default()
         };
         let local = Hardware::from_raw("local", "local", "laptop", 1800, 4, "x86_64");
         let phone = Hardware::from_raw("phone", "phone", "phone", 3900, 4, "arm64");
@@ -918,6 +957,7 @@ mod tests {
             size_mb: 1000,
             layers: 10,
             kv_bytes_per_token: 0,
+            ..Default::default()
         };
         let plan = crate::plan::plan(
             &model,
@@ -968,6 +1008,7 @@ mod tests {
             size_mb: 1,
             layers: 1,
             kv_bytes_per_token: 0,
+            ..Default::default()
         };
         let plan = crate::plan::plan(
             &model,
@@ -1034,6 +1075,7 @@ mod tests {
             size_mb: 1,
             layers: 1,
             kv_bytes_per_token: 0,
+            ..Default::default()
         };
         let phone = Hardware {
             id: "phone".into(),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the PrivateLM-LAN node. Requires a local inference engine:
+# Starts the localhost.ai-LAN node. Requires a local inference engine:
 #   - Ollama (ollama serve)  — auto-detected
 #   - llama-server (llama.cpp) on :8080 — auto-detected
 set -euo pipefail

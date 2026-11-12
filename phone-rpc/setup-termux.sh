@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# PrivateLM-LAN: turn this Android phone into a llama.cpp RPC worker.
+# localhost.ai-LAN: turn this Android phone into a llama.cpp RPC worker.
 # The laptop then splits model layers across phone + laptop memory/CPU.
 #
 # One-time setup (in Termux):
@@ -12,7 +12,7 @@ cd ~
 LLAMA_DIR=~/llama.cpp
 PORT=50052
 
-# Device tier — same idea as PrivateLM's DeviceInfoService: scale threads
+# Device tier — same idea as localhost.ai's DeviceInfoService: scale threads
 # to the SoC instead of hardcoding.
 TOTAL_MB=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
 AVAIL_MB=$(grep MemAvailable /proc/meminfo | awk '{print int($2/1024)}')

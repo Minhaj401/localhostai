@@ -1,4 +1,4 @@
-//! PrivateLM — one binary: terminal chat and an embedded LAN node.
+//! localhost.ai — one binary: terminal chat and an embedded LAN node.
 
 mod api;
 mod app;
@@ -14,7 +14,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use privateml_core::{config::Config, server, SplitPlan};
+use localhostai_core::{config::Config, server, SplitPlan};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -32,11 +32,11 @@ enum UiEvent {
     DeviceToggle(Result<String>),
     Browse {
         request_id: u64,
-        result: Result<privateml_core::model_hub::HubResults>,
+        result: Result<localhostai_core::model_hub::HubResults>,
     },
     Downloaded {
         operation_id: u64,
-        result: Result<privateml_core::ModelInfo>,
+        result: Result<localhostai_core::ModelInfo>,
     },
     Preview {
         request_id: u64,
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     if options.version {
         println!(
             "{} {}",
-            privateml_core::APP_DISPLAY_NAME,
+            localhostai_core::APP_DISPLAY_NAME,
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
 
     let (node, handle) = if let Some(url) = &options.connect {
         (
-            Node::with_token(url, std::env::var("PRIVATELM_TOKEN").ok()),
+            Node::with_token(url, std::env::var("LOCALHOSTAI_TOKEN").ok()),
             None,
         )
     } else {
@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
     let work = async {
         if options.status {
             let h = node.health().await?;
-            println!("{} {}", privateml_core::APP_DISPLAY_NAME, h.version);
+            println!("{} {}", localhostai_core::APP_DISPLAY_NAME, h.version);
             println!("node    : {}", h.name);
             println!("listen  : {}", node.base());
             println!("backend : {}", h.backend);
@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
         } else if options.headless {
             println!(
                 "{} {} — node listening on {}",
-                privateml_core::APP_DISPLAY_NAME,
+                localhostai_core::APP_DISPLAY_NAME,
                 env!("CARGO_PKG_VERSION"),
                 node.base()
             );
@@ -177,8 +177,8 @@ async fn shutdown_signal() -> Result<()> {
 
 fn print_help() {
     println!(
-        "PrivateLM {} — private LLM chat across your laptop and phone\n\
-\nUSAGE:\n  privateml [OPTIONS]\n\
+        "localhost.ai {} — private LLM chat across your laptop and phone\n\
+\nUSAGE:\n  localhostai [OPTIONS]\n\
 \nOPTIONS:\n\
   --once <PROMPT>     print one streamed reply and exit\n\
   --status           show node address, backend and models, then exit\n\
@@ -193,10 +193,10 @@ fn print_help() {
   -V, --version      show version\n\
 \nKEYS:\n  Enter send · ↑ models · F1 help · Ctrl+A activity · Ctrl+X stop\n\
   Ctrl+D devices · Ctrl+P pair · PageUp/PageDown chat · Esc quit\n\
-\nFILES:\n  ~/.privateml/config.toml   settings\n\
-  ~/.privateml/pair_token    shared secret for the phone\n\
-  ~/.privateml/models/       GGUF files\n\
-\nSet PRIVATELM_TOKEN when connecting to a node that requires pairing.",
+\nFILES:\n  ~/.localhostai/config.toml   settings\n\
+  ~/.localhostai/pair_token    shared secret for the phone\n\
+  ~/.localhostai/models/       GGUF files\n\
+\nSet LOCALHOSTAI_TOKEN when connecting to a node that requires pairing.",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -204,7 +204,7 @@ fn print_help() {
 async fn once(node: Node, prompt: String) -> Result<()> {
     let health = node.health().await?;
     if !health.ok {
-        bail!("no model is loaded; run `privateml`, choose a model in the TUI, and press Enter");
+        bail!("no model is loaded; run `localhostai`, choose a model in the TUI, and press Enter");
     }
     let (tx, mut rx) = mpsc::unbounded_channel();
     let model = health.models.first().cloned();
@@ -238,7 +238,7 @@ impl Drop for TerminalGuard {
 async fn run_tui(node: Node) -> Result<()> {
     use std::io::IsTerminal;
     if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
-        bail!("PrivateLM's chat UI needs a terminal.\nTry: privateml --status or privateml --once \"hello\"");
+        bail!("localhost.ai's chat UI needs a terminal.\nTry: localhostai --status or localhostai --once \"hello\"");
     }
     enable_raw_mode()?;
     let _guard = TerminalGuard;
@@ -313,12 +313,19 @@ fn apply_snapshot(app: &mut App, update: Snapshot) {
         let status = &managed["status"];
         app.setup_phase = status["phase"].as_str().unwrap_or("idle").to_string();
         app.setup_model = status["model"].as_str().map(String::from);
+        app.setup_job = status["job_id"].as_str().map(String::from);
         app.setup_message = status["message"].as_str().map(String::from);
         app.setup_downloaded = status["downloaded_bytes"].as_u64().unwrap_or(0);
         app.setup_total = status["total_bytes"].as_u64().unwrap_or(0);
         app.setup_busy = matches!(
             app.setup_phase.as_str(),
-            "downloading_runtime" | "installing_runtime" | "verifying_model" | "downloading_model"
+            "queued"
+                | "preparing"
+                | "resolving_model"
+                | "downloading_runtime"
+                | "installing_runtime"
+                | "verifying_model"
+                | "downloading_model"
         );
         if app.setup_busy {
             let progress = if app.setup_total > 0 {
@@ -340,7 +347,7 @@ fn apply_snapshot(app: &mut App, update: Snapshot) {
             ));
             app.activity_message = app.notice.clone().unwrap_or_default();
             app.operation_busy = true;
-        } else if app.setup_phase == "failed" {
+        } else if matches!(app.setup_phase.as_str(), "failed" | "cancelled") {
             app.notice = status["message"].as_str().map(String::from);
             app.activity_message = app
                 .notice
@@ -613,9 +620,9 @@ async fn event_loop(
                 refreshing = false;
             }
             UiEvent::Pair(result) => match result {
-                Ok(uri) => match privateml_core::qr::encode(&uri) {
+                Ok(uri) => match localhostai_core::qr::encode(&uri) {
                     Some(grid) => {
-                        app.qr_lines = privateml_core::qr::render_terminal(&grid, 4);
+                        app.qr_lines = localhostai_core::qr::render_terminal(&grid, 4);
                         app.pair_uri = uri;
                     }
                     None => app.notice = Some("Pairing payload is too large to encode".into()),
@@ -758,202 +765,261 @@ async fn event_loop(
             | UiEvent::Downloaded { .. } => {
                 // A newer operation superseded this result.
             }
-            UiEvent::Key(key) => match app.key(key) {
-                Action::Quit => break,
-                Action::None => {}
-                Action::Refresh => {
-                    if !refreshing {
-                        request_snapshot(&node, &tx);
-                        refreshing = true;
+            UiEvent::Key(key) => {
+                match app.key(key) {
+                    Action::Quit => break,
+                    Action::None => {}
+                    Action::Refresh => {
+                        if !refreshing {
+                            request_snapshot(&node, &tx);
+                            refreshing = true;
+                        }
                     }
-                }
-                Action::Pair => {
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = node.get_json("/pair").await.and_then(|v| {
-                            let uri = v["uri"].as_str().unwrap_or("").to_string();
-                            if uri.is_empty() {
-                                bail!("node did not return a pairing URI");
-                            }
-                            Ok(uri)
-                        });
-                        let _ = tx.send(UiEvent::Pair(result));
-                    });
-                }
-                Action::Preview {
-                    request_id,
-                    model,
-                    ctx,
-                } => request_model_preview(&node, &tx, request_id, model, ctx),
-                Action::Browse { request_id, query } => {
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = node
-                            .post_json("/models/browse", &json!({"query":query}))
-                            .await
-                            .and_then(|value| {
-                                serde_json::from_value(value)
-                                    .context("invalid model search response")
-                            });
-                        let _ = tx.send(UiEvent::Browse { request_id, result });
-                    });
-                }
-                Action::Download { source, name } => {
-                    app.operation_id = app.operation_id.wrapping_add(1);
-                    let operation_id = app.operation_id;
-                    app.operation_busy = true;
-                    app.setup_busy = true;
-                    app.activity_error = false;
-                    app.activity_message = format!("Downloading {name}");
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = node
-                            .post_json_long("/managed/download", &json!({"source":source}))
-                            .await
-                            .and_then(|value| {
-                                serde_json::from_value(value["model"].clone())
-                                    .context("invalid downloaded model response")
-                            });
-                        let _ = tx.send(UiEvent::Downloaded {
-                            operation_id,
-                            result,
-                        });
-                    });
-                }
-                Action::InstallOnly(model) => {
-                    app.operation_id = app.operation_id.wrapping_add(1);
-                    let operation_id = app.operation_id;
-                    app.operation_busy = true;
-                    app.activity_error = false;
-                    app.activity_message = format!("Installing {model}");
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = node
-                            .post_json_long("/managed/install", &json!({"model": &model}))
-                            .await
-                            .map(|_| ());
-                        let _ = tx.send(UiEvent::Installed {
-                            operation_id,
-                            model,
-                            result,
-                        });
-                    });
-                }
-                Action::ToggleDevice { id, enabled } => {
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = node
-                            .post_json("/peers/toggle", &json!({"id": id, "enabled": enabled}))
-                            .await
-                            .map(|_| {
-                                if enabled {
-                                    "Device included in future model loads".to_string()
-                                } else {
-                                    "Device excluded from future model loads".to_string()
+                    Action::Pair => {
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node.get_json("/pair").await.and_then(|v| {
+                                let uri = v["uri"].as_str().unwrap_or("").to_string();
+                                if uri.is_empty() {
+                                    bail!("node did not return a pairing URI");
                                 }
+                                Ok(uri)
                             });
-                        let _ = tx.send(UiEvent::DeviceToggle(result));
-                    });
-                }
-                Action::Start { model, ctx } => {
-                    app.operation_id = app.operation_id.wrapping_add(1);
-                    let operation_id = app.operation_id;
-                    app.cluster_starting = true;
-                    app.operation_busy = true;
-                    app.activity_error = false;
-                    app.setup_busy = app
-                        .catalog_model(&model)
-                        .is_some_and(|entry| !entry.installed || !app.runtime_ready);
-                    app.notice = Some(if app.setup_busy {
-                        format!("Preparing {model} for first use…")
-                    } else {
-                        format!("Planning and loading {model} at {ctx} tokens…")
-                    });
-                    app.activity_message = app.notice.clone().unwrap_or_default();
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = start_distributed(&node, &model, ctx).await;
-                        let (model, notice) = match result {
-                            Ok(summary) => (Some(model), summary),
-                            Err(e) => (None, format!("Could not start: {e}")),
-                        };
-                        let _ = tx.send(UiEvent::Cluster {
-                            operation_id,
-                            model,
-                            notice,
+                            let _ = tx.send(UiEvent::Pair(result));
                         });
-                    });
-                }
-                Action::StopCluster => {
-                    app.operation_id = app.operation_id.wrapping_add(1);
-                    let operation_id = app.operation_id;
-                    app.overlay = Overlay::Activity;
-                    app.operation_busy = true;
-                    app.activity_error = false;
-                    app.activity_message = "Stopping the active model…".into();
-                    let node = node.clone();
-                    let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let result = stop_cluster(&node).await;
-                        let _ = tx.send(UiEvent::Stopped {
-                            operation_id,
-                            result,
-                        });
-                    });
-                }
-                Action::CancelChat => {
-                    chat_generation = chat_generation.wrapping_add(1);
-                    if let Some(task) = chat_task.take() {
-                        task.abort();
                     }
-                    if !app.streaming.is_empty() {
+                    Action::Preview {
+                        request_id,
+                        model,
+                        ctx,
+                    } => request_model_preview(&node, &tx, request_id, model, ctx),
+                    Action::Browse { request_id, query } => {
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node
+                                .post_json("/models/browse", &json!({"query":query}))
+                                .await
+                                .and_then(|value| {
+                                    serde_json::from_value(value)
+                                        .context("invalid model search response")
+                                });
+                            let _ = tx.send(UiEvent::Browse { request_id, result });
+                        });
+                    }
+                    Action::Download { source, name } => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.operation_busy = true;
+                        app.setup_busy = true;
+                        app.activity_error = false;
+                        app.activity_message = format!("Downloading {name}");
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                install_job(&node, "/managed/download", json!({"source":source}))
+                                    .await
+                                    .and_then(|value| {
+                                        serde_json::from_value(value["result"].clone())
+                                            .context("invalid downloaded model response")
+                                    });
+                            let _ = tx.send(UiEvent::Downloaded {
+                                operation_id,
+                                result,
+                            });
+                        });
+                    }
+                    Action::InstallOnly(model) => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.operation_busy = true;
+                        app.activity_error = false;
+                        app.activity_message = format!("Installing {model}");
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                install_job(&node, "/managed/install", json!({"model": &model}))
+                                    .await
+                                    .map(|_| ());
+                            let _ = tx.send(UiEvent::Installed {
+                                operation_id,
+                                model,
+                                result,
+                            });
+                        });
+                    }
+                    Action::ToggleDevice { id, enabled } => {
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node
+                                .post_json("/peers/toggle", &json!({"id": id, "enabled": enabled}))
+                                .await
+                                .map(|_| {
+                                    if enabled {
+                                        "Device included in future model loads".to_string()
+                                    } else {
+                                        "Device excluded from future model loads".to_string()
+                                    }
+                                });
+                            let _ = tx.send(UiEvent::DeviceToggle(result));
+                        });
+                    }
+                    Action::Start { model, ctx } => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.cluster_starting = true;
+                        app.operation_busy = true;
+                        app.activity_error = false;
+                        app.setup_busy = app
+                            .catalog_model(&model)
+                            .is_some_and(|entry| !entry.installed || !app.runtime_ready);
+                        app.notice = Some(if app.setup_busy {
+                            format!("Preparing {model} for first use…")
+                        } else {
+                            format!("Planning and loading {model} at {ctx} tokens…")
+                        });
+                        app.activity_message = app.notice.clone().unwrap_or_default();
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = start_distributed(&node, &model, ctx).await;
+                            let (model, notice) = match result {
+                                Ok(summary) => (Some(model), summary),
+                                Err(e) => (None, format!("Could not start: {e}")),
+                            };
+                            let _ = tx.send(UiEvent::Cluster {
+                                operation_id,
+                                model,
+                                notice,
+                            });
+                        });
+                    }
+                    Action::StopCluster => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.overlay = Overlay::Activity;
+                        app.operation_busy = true;
+                        app.activity_error = false;
+                        app.activity_message = "Stopping the active model…".into();
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = stop_cluster(&node).await;
+                            let _ = tx.send(UiEvent::Stopped {
+                                operation_id,
+                                result,
+                            });
+                        });
+                    }
+                    Action::CancelChat => {
+                        chat_generation = chat_generation.wrapping_add(1);
+                        if let Some(task) = chat_task.take() {
+                            task.abort();
+                        }
+                        if !app.streaming.is_empty() {
+                            app.messages.push(Msg {
+                                role: "assistant".into(),
+                                content: std::mem::take(&mut app.streaming),
+                                tag: Some("interrupted".into()),
+                            });
+                        }
+                        app.busy = false;
+                        app.notice = Some("Generation stopped".into());
+                        app.activity_message = "Generation stopped".into();
+                        app.activity_error = false;
+                    }
+                    Action::CancelInstall(job_id) => {
+                        app.activity_message = "Cancelling installation...".into();
+                        let operation_id = app.operation_id;
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node
+                                .post_json("/managed/cancel", &json!({"job_id":job_id}))
+                                .await
+                                .and_then(|value| {
+                                    if value["ok"].as_bool() == Some(true) {
+                                        Ok("Installation cancelled; partial data was retained"
+                                            .into())
+                                    } else {
+                                        bail!("installation was not cancelled")
+                                    }
+                                });
+                            let _ = tx.send(UiEvent::Stopped {
+                                operation_id,
+                                result,
+                            });
+                        });
+                    }
+                    Action::DeleteModel(model) => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.operation_busy = true;
+                        app.activity_message = format!("Deleting {model}...");
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node
+                                .post_json("/managed/delete", &json!({"model":model}))
+                                .await
+                                .map(|_| "Model deleted from this laptop".into());
+                            let _ = tx.send(UiEvent::Stopped {
+                                operation_id,
+                                result,
+                            });
+                        });
+                    }
+                    Action::ResetRuntime => {
+                        app.operation_id = app.operation_id.wrapping_add(1);
+                        let operation_id = app.operation_id;
+                        app.operation_busy = true;
+                        app.activity_message = "Resetting the managed runtime...".into();
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node.post_json("/managed/runtime/reset", &json!({})).await
+                            .map(|_| "Runtime reset; the next model load installs a fresh pinned copy".into());
+                            let _ = tx.send(UiEvent::Stopped {
+                                operation_id,
+                                result,
+                            });
+                        });
+                    }
+                    Action::Send => {
                         app.messages.push(Msg {
-                            role: "assistant".into(),
-                            content: std::mem::take(&mut app.streaming),
-                            tag: Some("interrupted".into()),
+                            role: "user".into(),
+                            content: std::mem::take(&mut app.input),
+                            tag: None,
                         });
+                        app.input_cursor = 0;
+                        app.busy = true;
+                        app.streaming.clear();
+                        app.notice = None;
+                        app.activity_message = "Generating response…".into();
+                        app.activity_error = false;
+                        app.scroll_to_bottom();
+                        chat_generation = chat_generation.wrapping_add(1);
+                        let generation = chat_generation;
+                        let node = node.clone();
+                        let history = app.history();
+                        let model = app.model.clone();
+                        let system = app.system_prompt.clone();
+                        let (api_tx, api_rx) = mpsc::unbounded_channel();
+                        chat_task = Some(tokio::spawn(async move {
+                            // The core client emits exactly one Failed event for
+                            // every error, including transport failures.
+                            let _ = node
+                                .chat_stream(model.as_deref(), history, Some(&system), api_tx)
+                                .await;
+                        }));
+                        tokio::spawn(forward(api_rx, tx.clone(), generation));
                     }
-                    app.busy = false;
-                    app.notice = Some("Generation stopped".into());
-                    app.activity_message = "Generation stopped".into();
-                    app.activity_error = false;
                 }
-                Action::Send => {
-                    app.messages.push(Msg {
-                        role: "user".into(),
-                        content: std::mem::take(&mut app.input),
-                        tag: None,
-                    });
-                    app.input_cursor = 0;
-                    app.busy = true;
-                    app.streaming.clear();
-                    app.notice = None;
-                    app.activity_message = "Generating response…".into();
-                    app.activity_error = false;
-                    app.scroll_to_bottom();
-                    chat_generation = chat_generation.wrapping_add(1);
-                    let generation = chat_generation;
-                    let node = node.clone();
-                    let history = app.history();
-                    let model = app.model.clone();
-                    let system = app.system_prompt.clone();
-                    let (api_tx, api_rx) = mpsc::unbounded_channel();
-                    chat_task = Some(tokio::spawn(async move {
-                        // The core client emits exactly one Failed event for
-                        // every error, including transport failures.
-                        let _ = node
-                            .chat_stream(model.as_deref(), history, Some(&system), api_tx)
-                            .await;
-                    }));
-                    tokio::spawn(forward(api_rx, tx.clone(), generation));
-                }
-            },
+            }
         }
     }
     Ok(())
@@ -983,8 +1049,7 @@ async fn start_distributed(node: &Node, model: &str, ctx: u32) -> Result<String>
             .find(|entry| entry["id"].as_str() == Some(model))
     });
     if catalog_entry.is_some() || custom_entry.is_some() {
-        node.post_json_long("/managed/install", &json!({"model": model}))
-            .await?;
+        install_job(node, "/managed/install", json!({"model": model})).await?;
     }
     let request = json!({"model": model, "ctx": ctx});
     let plan = node.post_json("/cluster/plan", &request).await?;
@@ -1005,6 +1070,32 @@ async fn start_distributed(node: &Node, model: &str, ctx: u32) -> Result<String>
         );
     }
     Ok(summary.into())
+}
+
+async fn install_job(node: &Node, path: &str, mut body: Value) -> Result<Value> {
+    body["async"] = json!(true);
+    let accepted = node.post_json(path, &body).await?;
+    let id = accepted["job"]["id"]
+        .as_str()
+        .context("node did not return an installation job")?
+        .to_string();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(7200);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            bail!("installation exceeded its two-hour operation deadline; retry to resume");
+        }
+        let value = node.get_json(&format!("/managed/jobs/{id}")).await?;
+        match value["job"]["state"].as_str().unwrap_or("") {
+            "succeeded" => return Ok(value["job"].clone()),
+            "failed" | "cancelled" => bail!(
+                "{}",
+                value["job"]["error"]
+                    .as_str()
+                    .unwrap_or("installation failed")
+            ),
+            _ => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
+        }
+    }
 }
 
 async fn stop_cluster(node: &Node) -> Result<String> {

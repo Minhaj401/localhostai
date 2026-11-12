@@ -5,7 +5,7 @@
 //! OpenCV during development (OpenCV decoded the payload exactly); this test
 //! guards the structure and the encode/render path in CI.
 
-use privateml_core::qr::{encode, render_terminal, PairPayload};
+use localhostai_core::qr::{encode, render_terminal, PairPayload};
 
 #[test]
 fn payload_survives_encode_and_render() {

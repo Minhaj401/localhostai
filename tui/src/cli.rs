@@ -52,7 +52,7 @@ impl Options {
                     }
                     options.connect = Some(url);
                 }
-                _ => bail!("unknown option {arg}\n\nRun `privateml --help` for usage."),
+                _ => bail!("unknown option {arg}\n\nRun `localhostai --help` for usage."),
             }
         }
         if usize::from(options.status)

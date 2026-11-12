@@ -2,11 +2,11 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:privatelm_lan/features/connection/connection_controller.dart';
-import 'package:privatelm_lan/models/device_profile.dart';
-import 'package:privatelm_lan/models/pairing.dart';
-import 'package:privatelm_lan/services/node_client.dart';
-import 'package:privatelm_lan/services/phone_worker_service.dart';
+import 'package:localhostai/features/connection/connection_controller.dart';
+import 'package:localhostai/models/device_profile.dart';
+import 'package:localhostai/models/pairing.dart';
+import 'package:localhostai/services/node_client.dart';
+import 'package:localhostai/services/phone_worker_service.dart';
 
 import 'support.dart';
 
@@ -39,6 +39,7 @@ class AppFixture {
   bool customAvailable = false;
   bool customInstalled = false;
   String state = 'running';
+  String? _jobModel;
   Future<http.Response> Function(http.Request)? intercept;
 
   static const pair = PairPayload(
@@ -142,15 +143,16 @@ class AppFixture {
       case '/managed/download':
         customAvailable = true;
         customInstalled = true;
+        _jobModel = customId;
         value = {
           'ok': true,
-          'model': {'name': customId}
+          'job': {'id': 'job-1', 'state': 'queued'}
         };
       case '/cluster':
         value = {
           'state': state,
           'model': state == 'stopped' ? null : modelId,
-          'log': '/home/user/.privateml/logs/cluster.log',
+          'log': '/home/user/.localhostai/logs/cluster.log',
           'error': null,
           'assignments': []
         };
@@ -200,7 +202,19 @@ class AppFixture {
         } else {
           installed = true;
         }
-        value = {'ok': true};
+        _jobModel = (jsonDecode(request.body) as Map)['model'] as String;
+        value = {
+          'ok': true,
+          'job': {'id': 'job-1', 'state': 'queued'}
+        };
+      case '/managed/jobs/job-1':
+        value = {
+          'job': {
+            'id': 'job-1',
+            'state': 'succeeded',
+            'result': {'name': _jobModel ?? modelId}
+          }
+        };
       case '/cluster/start':
         state = 'running';
         value = {'ok': true, 'plan': plan(request)};

@@ -11,10 +11,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex, Semaphore};
 
 use crate::cluster::Toolchain;
 use crate::model_hub::{DownloadFile, HubResults, ModelHub, ModelSource, RemoteModel};
@@ -59,6 +59,8 @@ impl CatalogModel {
             size_mb: self.bytes.div_ceil(1024 * 1024),
             layers: self.layers,
             kv_bytes_per_token: self.kv_bytes_per_token,
+            coordinator_mb: 512,
+            ..Default::default()
         }
     }
 }
@@ -74,7 +76,7 @@ pub static CATALOG: &[CatalogModel] = &[
         bytes: 491_400_032,
         params_b: 0.5,
         layers: 24,
-        kv_bytes_per_token: 48_000,
+        kv_bytes_per_token: 24_576,
         license: "Apache-2.0",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/LICENSE",
         recommended: false,
@@ -89,7 +91,7 @@ pub static CATALOG: &[CatalogModel] = &[
         bytes: 1_117_320_736,
         params_b: 1.5,
         layers: 28,
-        kv_bytes_per_token: 96_000,
+        kv_bytes_per_token: 28_672,
         license: "Apache-2.0",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/LICENSE",
         recommended: true,
@@ -104,7 +106,7 @@ pub static CATALOG: &[CatalogModel] = &[
         bytes: 2_104_932_768,
         params_b: 3.0,
         layers: 36,
-        kv_bytes_per_token: 160_000,
+        kv_bytes_per_token: 36_864,
         license: "Qwen Research",
         license_url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/blob/7dabda4d13d513e3e842b20f0d435c732f172cbe/LICENSE",
         recommended: false,
@@ -148,6 +150,7 @@ pub struct ManagedStatus {
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
     pub message: Option<String>,
+    pub job_id: Option<String>,
 }
 
 impl Default for ManagedStatus {
@@ -158,6 +161,7 @@ impl Default for ManagedStatus {
             downloaded_bytes: 0,
             total_bytes: 0,
             message: None,
+            job_id: None,
         }
     }
 }
@@ -176,6 +180,27 @@ pub struct ManagedView<'a> {
     pub status: ManagedStatus,
     pub catalog: Vec<CatalogEntry<'a>>,
     pub custom: Vec<CustomEntry>,
+    pub jobs: Vec<InstallJobView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallJobView {
+    pub id: String,
+    pub state: String,
+    pub status: ManagedStatus,
+    pub result: Option<ModelInfo>,
+    pub error: Option<String>,
+}
+
+struct InstallJob {
+    view: watch::Sender<InstallJobView>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub enum InstallTask {
+    Model(String),
+    Download(ModelSource),
 }
 
 #[derive(Debug, Serialize)]
@@ -241,10 +266,14 @@ impl CustomRecord {
 struct Inner {
     status: Mutex<ManagedStatus>,
     operation: Mutex<()>,
-    client: reqwest::Client,
     downloaded_bytes: AtomicU64,
     verified_models: Mutex<HashMap<PathBuf, (u64, std::time::SystemTime)>>,
     custom_dir: PathBuf,
+    network: crate::network::NetworkPolicy,
+    jobs: Mutex<Vec<Arc<InstallJob>>>,
+    active_job: Mutex<Option<String>>,
+    job_slots: Arc<Semaphore>,
+    next_job: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -257,7 +286,22 @@ impl Managed {
         Self::with_custom_dir(crate::config::models_dir().join("custom"))
     }
 
+    pub fn with_model_hosts(hosts: Vec<String>) -> Result<Self> {
+        Self::with_options(
+            crate::config::models_dir().join("custom"),
+            crate::network::NetworkPolicy::new(hosts),
+        )
+    }
+
     fn with_custom_dir(custom_dir: PathBuf) -> Result<Self> {
+        #[cfg(test)]
+        let network = crate::network::NetworkPolicy::local_test();
+        #[cfg(not(test))]
+        let network = crate::network::NetworkPolicy::default();
+        Self::with_options(custom_dir, network)
+    }
+
+    fn with_options(custom_dir: PathBuf, network: crate::network::NetworkPolicy) -> Result<Self> {
         Ok(Self {
             inner: Arc::new(Inner {
                 status: Mutex::new(ManagedStatus::default()),
@@ -265,11 +309,11 @@ impl Managed {
                 downloaded_bytes: AtomicU64::new(0),
                 verified_models: Mutex::new(HashMap::new()),
                 custom_dir,
-                client: reqwest::Client::builder()
-                    .user_agent(concat!("PrivateLM/", env!("CARGO_PKG_VERSION")))
-                    .connect_timeout(std::time::Duration::from_secs(20))
-                    .timeout(std::time::Duration::from_secs(7200))
-                    .build()?,
+                network,
+                jobs: Mutex::new(Vec::new()),
+                active_job: Mutex::new(None),
+                job_slots: Arc::new(Semaphore::new(3)),
+                next_job: AtomicU64::new(1),
             }),
         })
     }
@@ -305,15 +349,277 @@ impl Managed {
                     custom: true,
                 })
                 .collect(),
+            jobs: self.jobs().await,
+        }
+    }
+
+    /// Installation jobs survive a control connection closing. Work is bounded
+    /// to one installation plus two queued jobs and a two-hour whole-job clock.
+    pub async fn enqueue<F, Fut>(&self, task: InstallTask, ready: F) -> Result<InstallJobView>
+    where
+        F: FnOnce(ModelInfo) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let slot = self
+            .inner
+            .job_slots
+            .clone()
+            .try_acquire_owned()
+            .context("the installation queue is full; retry after a current job finishes")?;
+        let id = format!(
+            "install-{}-{}",
+            std::process::id(),
+            self.inner.next_job.fetch_add(1, Ordering::Relaxed)
+        );
+        let view = InstallJobView {
+            id: id.clone(),
+            state: "queued".into(),
+            status: ManagedStatus {
+                phase: "queued".into(),
+                job_id: Some(id.clone()),
+                model: match &task {
+                    InstallTask::Model(id) => Some(id.clone()),
+                    _ => None,
+                },
+                ..Default::default()
+            },
+            result: None,
+            error: None,
+        };
+        let (tx, _) = watch::channel(view.clone());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let job = Arc::new(InstallJob { view: tx, cancel });
+        {
+            let mut jobs = self.inner.jobs.lock().await;
+            while jobs.len() >= 32 {
+                if let Some(index) = jobs.iter().position(|job| {
+                    matches!(
+                        job.view.borrow().state.as_str(),
+                        "succeeded" | "failed" | "cancelled"
+                    )
+                }) {
+                    jobs.remove(index);
+                } else {
+                    break;
+                }
+            }
+            jobs.push(job.clone());
+        }
+        let managed = self.clone();
+        tokio::spawn(async move {
+            let _slot = slot;
+            let work_cancel = job.cancel.clone();
+            let managed_work = managed.clone();
+            let job_work = job.clone();
+            let id_work = id.clone();
+            let mut work = tokio::spawn(async move {
+                let _operation = managed_work.inner.operation.lock().await;
+                ensure_not_cancelled(&work_cancel)?;
+                *managed_work.inner.active_job.lock().await = Some(id_work.clone());
+                job_work.view.send_modify(|view| {
+                    view.state = "running".into();
+                    view.status.phase = "preparing".into();
+                });
+                managed_work
+                    .set_progress(
+                        "preparing",
+                        None,
+                        0,
+                        0,
+                        Some("Preparing installation".into()),
+                    )
+                    .await;
+                let model = match task {
+                    InstallTask::Model(model) => {
+                        managed_work.install_locked(&model, &work_cancel).await?
+                    }
+                    InstallTask::Download(source) => {
+                        managed_work.download_locked(&source, &work_cancel).await?
+                    }
+                };
+                ensure_not_cancelled(&work_cancel)?;
+                ready(model.clone()).await;
+                Ok::<_, anyhow::Error>(model)
+            });
+            let outcome = tokio::select! {
+                result = &mut work => result.context("installation task failed unexpectedly").and_then(|result| result),
+                _ = tokio::time::sleep(std::time::Duration::from_secs(7200)) => {
+                    job.cancel.store(true, Ordering::Relaxed);
+                    let _ = work.await;
+                    Err(anyhow::anyhow!("installation exceeded its two-hour operation deadline; retry to resume"))
+                }
+            };
+            let active = managed.inner.active_job.lock().await.clone();
+            let mut status = if active.as_deref() == Some(&id) {
+                managed.inner.status.lock().await.clone()
+            } else {
+                job.view.borrow().status.clone()
+            };
+            status.downloaded_bytes = if active.as_deref() == Some(&id) {
+                managed.inner.downloaded_bytes.load(Ordering::Relaxed)
+            } else {
+                status.downloaded_bytes
+            };
+            let cancelled = job.cancel.load(Ordering::Relaxed);
+            let state = if outcome.is_ok() {
+                "succeeded"
+            } else if cancelled {
+                "cancelled"
+            } else {
+                "failed"
+            };
+            if outcome.is_err() {
+                status.phase = state.into();
+                status.message = outcome.as_ref().err().map(|error| format!("{error:#}"));
+            }
+            job.view.send_replace(InstallJobView {
+                id: id.clone(),
+                state: state.into(),
+                status: status.clone(),
+                result: outcome.as_ref().ok().cloned(),
+                error: outcome.err().map(|error| format!("{error:#}")),
+            });
+            let mut active = managed.inner.active_job.lock().await;
+            if active.as_deref() == Some(&id) {
+                *managed.inner.status.lock().await = status;
+                *active = None;
+            }
+        });
+        Ok(view)
+    }
+
+    pub async fn jobs(&self) -> Vec<InstallJobView> {
+        let jobs = self.inner.jobs.lock().await.clone();
+        let active = self.inner.active_job.lock().await.clone();
+        let mut current = self.inner.status.lock().await.clone();
+        current.downloaded_bytes = self.inner.downloaded_bytes.load(Ordering::Relaxed);
+        jobs.into_iter()
+            .map(|job| {
+                let mut view = job.view.borrow().clone();
+                if view.state == "running" && active.as_deref() == Some(&view.id) {
+                    view.status = current.clone();
+                }
+                view
+            })
+            .collect()
+    }
+
+    pub async fn job(&self, id: &str) -> Option<InstallJobView> {
+        self.jobs().await.into_iter().find(|job| job.id == id)
+    }
+
+    pub async fn cancel(&self, id: &str) -> bool {
+        let jobs = self.inner.jobs.lock().await;
+        let Some(job) = jobs.iter().find(|job| job.view.borrow().id == id) else {
+            return false;
+        };
+        if matches!(job.view.borrow().state.as_str(), "queued" | "running") {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        true
+    }
+
+    pub async fn wait_job(&self, id: &str) -> Result<ModelInfo> {
+        let job = self
+            .inner
+            .jobs
+            .lock()
+            .await
+            .iter()
+            .find(|job| job.view.borrow().id == id)
+            .cloned()
+            .context("unknown installation job")?;
+        let mut changed = job.view.subscribe();
+        loop {
+            let view = changed.borrow().clone();
+            if view.state == "succeeded" {
+                return view
+                    .result
+                    .context("installation completed without a model");
+            }
+            if matches!(view.state.as_str(), "failed" | "cancelled") {
+                bail!(
+                    "{}",
+                    view.error.unwrap_or_else(|| "installation failed".into())
+                );
+            }
+            changed
+                .changed()
+                .await
+                .context("installation session ended; retry to resume")?;
         }
     }
 
     pub async fn browse(&self, query: &str) -> Result<HubResults> {
-        ModelHub::new(self.inner.client.clone()).browse(query).await
+        ModelHub::with_policy(self.inner.network.clone())
+            .browse(query)
+            .await
     }
 
     pub fn has_custom_model(&self, id: &str) -> bool {
         self.custom_record(id).is_some()
+    }
+
+    pub async fn remove_model(&self, id: &str) -> Result<()> {
+        let _operation = self.inner.operation.lock().await;
+        if let Some(model) = Self::catalog_model(id) {
+            for path in [model.path(), partial_path(&model.path())] {
+                match tokio::fs::remove_file(&path).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| format!("remove {}", path.display()))
+                    }
+                }
+            }
+            self.inner
+                .verified_models
+                .lock()
+                .await
+                .remove(&model.path());
+            return Ok(());
+        }
+        let record = self.custom_record(id).context("unknown managed model")?;
+        let directory = self.inner.custom_dir.join(&record.model.id);
+        match tokio::fs::remove_dir_all(&directory).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("remove {}", directory.display()))
+            }
+        }
+        self.inner
+            .verified_models
+            .lock()
+            .await
+            .retain(|path, _| !path.starts_with(&directory));
+        Ok(())
+    }
+
+    pub async fn reset_runtime(&self) -> Result<()> {
+        let _operation = self.inner.operation.lock().await;
+        let _lock = install_lock(&crate::config::home())?;
+        for path in [
+            crate::config::bin_dir().join(RUNTIME_DIR),
+            crate::config::bin_dir().join(format!("{RUNTIME_DIR}.tar.gz")),
+        ] {
+            if path.is_dir() {
+                let _ = tokio::fs::remove_dir_all(path).await;
+            } else {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+        }
+        self.set_progress(
+            "idle",
+            None,
+            0,
+            0,
+            Some(
+                "Managed runtime removed; the next model load installs a fresh pinned copy".into(),
+            ),
+        )
+        .await;
+        Ok(())
     }
 
     fn custom_record(&self, id: &str) -> Option<CustomRecord> {
@@ -348,23 +654,45 @@ impl Managed {
     }
 
     pub async fn download(&self, source: &ModelSource) -> Result<ModelInfo> {
-        let model = ModelHub::new(self.inner.client.clone())
+        let _operation = self.inner.operation.lock().await;
+        self.download_locked(source, &Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    async fn download_locked(
+        &self,
+        source: &ModelSource,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<ModelInfo> {
+        ensure_not_cancelled(cancel)?;
+        self.set_progress(
+            "resolving_model",
+            None,
+            0,
+            0,
+            Some("Resolving the selected GGUF revision".into()),
+        )
+        .await;
+        let model = ModelHub::with_policy(self.inner.network.clone())
             .resolve(source)
             .await?;
-        let _operation = self.inner.operation.lock().await;
         let record = self.custom_record(&model.id).unwrap_or(CustomRecord {
             model,
             complete: false,
         });
-        self.install_custom(record).await
+        self.install_custom(record, cancel).await
     }
 
-    async fn install_custom(&self, mut record: CustomRecord) -> Result<ModelInfo> {
+    async fn install_custom(
+        &self,
+        mut record: CustomRecord,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<ModelInfo> {
         let result = async {
             let lock = install_lock(&crate::config::home())?;
             record.save(&self.inner.custom_dir)?;
-            self.ensure_runtime(lock.clone()).await?;
-            self.ensure_custom_model(&mut record).await
+            self.ensure_runtime(lock.clone(), cancel).await?;
+            self.ensure_custom_model(&mut record, cancel).await
         }
         .await;
         match &result {
@@ -392,36 +720,43 @@ impl Managed {
         result
     }
 
-    async fn ensure_custom_model(&self, record: &mut CustomRecord) -> Result<ModelInfo> {
+    async fn ensure_custom_model(
+        &self,
+        record: &mut CustomRecord,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<ModelInfo> {
+        ensure_not_cancelled(cancel)?;
         let root = &self.inner.custom_dir;
         record.model.validate()?;
         std::fs::create_dir_all(root)?;
-        let remaining = record.model.files.iter().try_fold(0u64, |total, file| {
+        let mut verified_files = Vec::with_capacity(record.model.files.len());
+        let mut remaining = 0u64;
+        for file in &record.model.files {
             let path = root.join(&record.model.id).join(&file.filename);
-            let part = path.with_extension(format!(
-                "{}.part",
-                path.extension()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("download")
-            ));
-            let saved = std::fs::metadata(&path)
-                .or_else(|_| std::fs::metadata(&part))
-                .map(|metadata| metadata.len().min(file.bytes))
-                .unwrap_or(0);
-            total
-                .checked_add(file.bytes.saturating_sub(saved))
-                .context("model size overflow")
-        })?;
-        const DISK_HEADROOM: u64 = 512 * 1024 * 1024;
-        if fs2::available_space(root)? < remaining.saturating_add(DISK_HEADROOM) {
-            bail!("not enough free disk space for this model and 512 MiB of installation headroom");
+            self.set_progress(
+                "verifying_model",
+                Some(record.model.id.clone()),
+                0,
+                record.model.bytes,
+                Some("Checking reusable model files before reserving disk space".into()),
+            )
+            .await;
+            let verified = match &file.sha256 {
+                Some(sha) => self.file_verified(&path, file.bytes, sha).await?,
+                None => false,
+            };
+            verified_files.push(verified);
+            if !verified {
+                remaining = remaining.saturating_add(download_remaining(file, &path).await?);
+            }
         }
+        ensure_disk_space(root, remaining)?;
         // An incomplete/repaired set must never be advertised after restart.
         record.complete = false;
         record.save(root)?;
         let mut finished = 0u64;
-        for index in 0..record.model.files.len() {
-            let file = &record.model.files[index];
+        for (index, verified) in verified_files.iter().copied().enumerate() {
+            let file = record.model.files[index].clone();
             let path = root.join(&record.model.id).join(&file.filename);
             self.set_progress(
                 "verifying_model",
@@ -431,10 +766,6 @@ impl Managed {
                 Some(format!("Checking {}", file.filename)),
             )
             .await;
-            let verified = match &file.sha256 {
-                Some(sha) => self.file_verified(&path, file.bytes, sha).await?,
-                None => false,
-            };
             if !verified {
                 self.set_progress(
                     "downloading_model",
@@ -450,11 +781,17 @@ impl Managed {
                 )
                 .await;
                 let progress = self.inner.clone();
-                let sha = download_artifact(&self.inner.client, file, &path, move |downloaded| {
-                    progress
-                        .downloaded_bytes
-                        .store(finished.saturating_add(downloaded), Ordering::Relaxed);
-                })
+                let sha = download_artifact_policy(
+                    &self.inner.network,
+                    &file,
+                    &path,
+                    move |downloaded| {
+                        progress
+                            .downloaded_bytes
+                            .store(finished.saturating_add(downloaded), Ordering::Relaxed);
+                    },
+                    cancel,
+                )
                 .await?;
                 // Reject HTML, Git LFS pointers, projectors, and invalid GGUFs
                 // before exposing the model through /models or marking ready.
@@ -474,17 +811,22 @@ impl Managed {
     }
 
     pub async fn install(&self, id: &str) -> Result<ModelInfo> {
+        let _operation = self.inner.operation.lock().await;
+        self.install_locked(id, &Arc::new(AtomicBool::new(false)))
+            .await
+    }
+
+    async fn install_locked(&self, id: &str, cancel: &Arc<AtomicBool>) -> Result<ModelInfo> {
+        ensure_not_cancelled(cancel)?;
         if let Some(record) = self.custom_record(id) {
-            let _operation = self.inner.operation.lock().await;
-            return self.install_custom(record).await;
+            return self.install_custom(record, cancel).await;
         }
         let model =
             Self::catalog_model(id).with_context(|| format!("unknown catalog model '{id}'"))?;
-        let _operation = self.inner.operation.lock().await;
         let result = async {
             let lock = install_lock(&crate::config::home())?;
-            self.ensure_runtime(lock.clone()).await?;
-            self.ensure_model(model).await?;
+            self.ensure_runtime(lock.clone(), cancel).await?;
+            self.ensure_model(model, cancel).await?;
             ModelInfo::from_file(&model.path(), model.id)
         }
         .await;
@@ -508,12 +850,18 @@ impl Managed {
         result
     }
 
-    async fn ensure_runtime(&self, lock: Arc<std::fs::File>) -> Result<()> {
+    async fn ensure_runtime(
+        &self,
+        lock: Arc<std::fs::File>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<()> {
+        ensure_not_cancelled(cancel)?;
         if Toolchain::explicit().is_some() || Toolchain::managed().is_some() {
             return Ok(());
         }
         let asset = runtime_asset()?;
         let archive = crate::config::bin_dir().join(format!("{RUNTIME_DIR}.tar.gz"));
+        ensure_disk_space(&crate::config::bin_dir(), asset.bytes.saturating_mul(8))?;
         self.set_progress(
             "downloading_runtime",
             None,
@@ -523,8 +871,8 @@ impl Managed {
         )
         .await;
         let progress = self.inner.clone();
-        download_verified(
-            &self.inner.client,
+        download_verified_policy(
+            &self.inner.network,
             asset.url,
             &archive,
             asset.bytes,
@@ -534,6 +882,7 @@ impl Managed {
                     .downloaded_bytes
                     .store(downloaded, Ordering::Relaxed)
             },
+            cancel,
         )
         .await?;
 
@@ -552,6 +901,7 @@ impl Managed {
         })
         .await
         .context("runtime installer task failed")??;
+        ensure_not_cancelled(cancel)?;
         let _ = tokio::fs::remove_file(archive).await;
         if Toolchain::managed().is_none() {
             bail!("downloaded runtime does not contain llama-server and ggml-rpc-server");
@@ -559,12 +909,18 @@ impl Managed {
         Ok(())
     }
 
-    async fn ensure_model(&self, model: &CatalogModel) -> Result<()> {
+    async fn ensure_model(&self, model: &CatalogModel, cancel: &Arc<AtomicBool>) -> Result<()> {
         let path = model.path();
-        self.ensure_model_at(model, &path).await
+        self.ensure_model_at(model, &path, cancel).await
     }
 
-    async fn ensure_model_at(&self, model: &CatalogModel, path: &Path) -> Result<()> {
+    async fn ensure_model_at(
+        &self,
+        model: &CatalogModel,
+        path: &Path,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<()> {
+        ensure_not_cancelled(cancel)?;
         self.set_progress(
             "verifying_model",
             Some(model.id.into()),
@@ -576,6 +932,17 @@ impl Managed {
         if self.model_verified(path, model).await? {
             return Ok(());
         }
+        let source = DownloadFile {
+            filename: model.filename.into(),
+            url: model.url.into(),
+            bytes: model.bytes,
+            sha256: Some(model.sha256.into()),
+            validator: None,
+        };
+        ensure_disk_space(
+            path.parent().context("model destination has no parent")?,
+            download_remaining(&source, path).await?,
+        )?;
         self.set_progress(
             "downloading_model",
             Some(model.id.into()),
@@ -589,8 +956,8 @@ impl Managed {
         )
         .await;
         let progress = self.inner.clone();
-        download_verified(
-            &self.inner.client,
+        download_verified_policy(
+            &self.inner.network,
             model.url,
             path,
             model.bytes,
@@ -600,6 +967,7 @@ impl Managed {
                     .downloaded_bytes
                     .store(downloaded, Ordering::Relaxed)
             },
+            cancel,
         )
         .await?;
         if let Some(stamp) = file_stamp(path).await {
@@ -678,6 +1046,7 @@ impl Managed {
         total_bytes: u64,
         message: Option<String>,
     ) {
+        let job_id = self.inner.active_job.lock().await.clone();
         self.inner
             .downloaded_bytes
             .store(downloaded_bytes, Ordering::Relaxed);
@@ -687,6 +1056,7 @@ impl Managed {
             downloaded_bytes,
             total_bytes,
             message,
+            job_id,
         };
     }
 }
@@ -701,6 +1071,53 @@ async fn file_stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
     })
 }
 
+fn partial_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
+        "{}.part",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("download")
+    ))
+}
+
+async fn download_remaining(source: &DownloadFile, path: &Path) -> Result<u64> {
+    // A final file being repaired remains on disk until atomic replacement. It
+    // never reduces the additional bytes required for the new partial file.
+    if source.sha256.is_none() && source.validator.is_none() {
+        let _ = tokio::fs::remove_file(partial_path(path)).await;
+    }
+    let mut reusable = if source.sha256.is_some() || source.validator.is_some() {
+        tokio::fs::metadata(partial_path(path))
+            .await
+            .map(|file| file.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if reusable > source.bytes {
+        reusable = 0;
+    }
+    if reusable == source.bytes {
+        if let Some(expected) = &source.sha256 {
+            let part = partial_path(path);
+            let actual = tokio::task::spawn_blocking(move || sha256_file(&part)).await??;
+            if actual != *expected {
+                tokio::fs::remove_file(partial_path(path)).await?;
+                reusable = 0;
+            }
+        }
+    }
+    Ok(source.bytes.saturating_sub(reusable))
+}
+
+fn ensure_disk_space(directory: &Path, additional: u64) -> Result<()> {
+    std::fs::create_dir_all(directory)?;
+    if fs2::available_space(directory)? < additional.saturating_add(512 * 1024 * 1024) {
+        bail!("not enough free disk space for the additional download bytes and 512 MiB of installation headroom");
+    }
+    Ok(())
+}
+
 fn install_lock(home: &Path) -> Result<Arc<std::fs::File>> {
     std::fs::create_dir_all(home)?;
     let file = std::fs::OpenOptions::new()
@@ -710,7 +1127,7 @@ fn install_lock(home: &Path) -> Result<Arc<std::fs::File>> {
         .write(true)
         .open(home.join("install.lock"))?;
     file.try_lock().context(
-        "another PrivateLM instance is installing a model; wait for it to finish and retry",
+        "another localhost.ai instance is installing a model; wait for it to finish and retry",
     )?;
     Ok(Arc::new(file))
 }
@@ -779,8 +1196,9 @@ fn install_runtime_archive_into(archive_path: &Path, bin: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 async fn download_verified<F>(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     url: &str,
     destination: &Path,
     expected_bytes: u64,
@@ -790,8 +1208,36 @@ async fn download_verified<F>(
 where
     F: Fn(u64) + Send + Sync,
 {
-    download_artifact(
-        client,
+    #[cfg(test)]
+    let policy = crate::network::NetworkPolicy::local_test();
+    #[cfg(not(test))]
+    let policy = crate::network::NetworkPolicy::default();
+    download_verified_policy(
+        &policy,
+        url,
+        destination,
+        expected_bytes,
+        expected_sha256,
+        progress,
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .await
+}
+
+async fn download_verified_policy<F>(
+    policy: &crate::network::NetworkPolicy,
+    url: &str,
+    destination: &Path,
+    expected_bytes: u64,
+    expected_sha256: &str,
+    progress: F,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()>
+where
+    F: Fn(u64) + Send + Sync,
+{
+    download_artifact_policy(
+        policy,
         &DownloadFile {
             filename: String::new(),
             url: url.into(),
@@ -801,13 +1247,15 @@ where
         },
         destination,
         progress,
+        cancel,
     )
     .await
     .map(|_| ())
 }
 
+#[cfg(test)]
 async fn download_artifact<F>(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     source: &DownloadFile,
     destination: &Path,
     progress: F,
@@ -815,14 +1263,42 @@ async fn download_artifact<F>(
 where
     F: Fn(u64) + Send + Sync,
 {
+    #[cfg(test)]
+    let policy = crate::network::NetworkPolicy::local_test();
+    #[cfg(not(test))]
+    let policy = crate::network::NetworkPolicy::default();
+    download_artifact_policy(
+        &policy,
+        source,
+        destination,
+        progress,
+        &Arc::new(AtomicBool::new(false)),
+    )
+    .await
+}
+
+async fn download_artifact_policy<F>(
+    policy: &crate::network::NetworkPolicy,
+    source: &DownloadFile,
+    destination: &Path,
+    progress: F,
+    cancel: &Arc<AtomicBool>,
+) -> Result<String>
+where
+    F: Fn(u64) + Send + Sync,
+{
     const MAX_ATTEMPTS: u32 = 8;
     let mut last_error = None;
     for attempt in 1..=MAX_ATTEMPTS {
-        match download_artifact_once(client, source, destination, &progress).await {
+        ensure_not_cancelled(cancel)?;
+        match download_artifact_once(policy, source, destination, &progress, cancel).await {
             Ok(sha) => return Ok(sha),
             Err(error) if attempt < MAX_ATTEMPTS && retryable_download_error(&error) => {
                 last_error = Some(error);
-                tokio::time::sleep(retry_delay(attempt)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(retry_delay(attempt)) => {},
+                    _ = wait_cancel(cancel) => return Err(anyhow::anyhow!("installation cancelled; valid partial data was retained")),
+                }
             }
             Err(error) => return Err(error),
         }
@@ -831,25 +1307,21 @@ where
 }
 
 async fn download_artifact_once<F>(
-    client: &reqwest::Client,
+    policy: &crate::network::NetworkPolicy,
     source: &DownloadFile,
     destination: &Path,
     progress: &F,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<String>
 where
     F: Fn(u64) + Send + Sync,
 {
     let expected_bytes = source.bytes;
+    ensure_not_cancelled(cancel)?;
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let part = destination.with_extension(format!(
-        "{}.part",
-        destination
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("download")
-    ));
+    let part = partial_path(destination);
     let mut existing = tokio::fs::metadata(&part)
         .await
         .map(|m| m.len())
@@ -877,22 +1349,24 @@ where
         tokio::fs::remove_file(&part).await?;
         existing = 0;
     }
-    let direct;
-    let client = if crate::model_hub::http_url(&source.url)?.host_str() == Some("huggingface.co") {
-        client
-    } else {
-        direct = crate::model_hub::direct_client()?;
-        &direct
-    };
-    let mut request = crate::model_hub::authenticated(client.get(&source.url))
-        .header(reqwest::header::ACCEPT_ENCODING, "identity");
+    let mut headers = reqwest::header::HeaderMap::new();
     if existing > 0 {
-        request = request.header(reqwest::header::RANGE, format!("bytes={existing}-"));
+        headers.insert(
+            reqwest::header::RANGE,
+            format!("bytes={existing}-").parse()?,
+        );
         if let Some(validator) = &source.validator {
-            request = request.header(reqwest::header::IF_RANGE, validator);
+            headers.insert(reqwest::header::IF_RANGE, validator.parse()?);
         }
     }
-    let response = request.send().await.context("download request failed")?;
+    let response = policy
+        .send(
+            reqwest::Method::GET,
+            &crate::model_hub::http_url(&source.url)?,
+            headers,
+            std::time::Duration::from_secs(7200),
+        )
+        .await?;
     let append = existing > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     if !response.status().is_success() {
         bail!("download failed with HTTP {}", response.status());
@@ -934,6 +1408,19 @@ where
     if !append {
         existing = 0;
     }
+    ensure_disk_space(
+        destination
+            .parent()
+            .context("download has no parent directory")?,
+        expected_bytes.saturating_sub(if append {
+            existing
+        } else {
+            tokio::fs::metadata(&part)
+                .await
+                .map(|file| file.len().min(expected_bytes))
+                .unwrap_or(0)
+        }),
+    )?;
     let mut options = tokio::fs::OpenOptions::new();
     options.create(true).write(true);
     if append {
@@ -945,14 +1432,31 @@ where
     let mut downloaded = existing;
     progress(downloaded);
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("download interrupted")?;
+    let mut checked_at = downloaded;
+    loop {
+        ensure_not_cancelled(cancel)?;
+        let chunk =
+            match tokio::time::timeout(std::time::Duration::from_secs(1), stream.next()).await {
+                Err(_) => continue,
+                Ok(None) => break,
+                Ok(Some(chunk)) => chunk,
+            };
+        let chunk = chunk
+            .map_err(reqwest::Error::without_url)
+            .context("download interrupted")?;
         downloaded = downloaded.saturating_add(chunk.len() as u64);
         if downloaded > expected_bytes {
             bail!("download exceeded its expected size");
         }
         file.write_all(&chunk).await?;
         progress(downloaded);
+        if downloaded.saturating_sub(checked_at) >= 64 * 1024 * 1024 {
+            ensure_disk_space(
+                destination.parent().unwrap(),
+                expected_bytes.saturating_sub(downloaded),
+            )?;
+            checked_at = downloaded;
+        }
     }
     file.sync_all().await?;
     drop(file);
@@ -973,6 +1477,19 @@ where
     }
     tokio::fs::rename(&part, destination).await?;
     Ok(actual)
+}
+
+fn ensure_not_cancelled(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        bail!("installation cancelled; valid partial data was retained");
+    }
+    Ok(())
+}
+
+async fn wait_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::Relaxed) {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 fn validate_range(value: &str, expected_start: u64, expected_size: u64) -> Result<()> {
@@ -1045,6 +1562,39 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[tokio::test]
+    async fn corrupt_final_files_do_not_reduce_repair_disk_requirements() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("model.gguf");
+        std::fs::write(&path, vec![0; 1024]).unwrap();
+        let source = DownloadFile {
+            filename: "model.gguf".into(),
+            url: "https://example.com/model.gguf".into(),
+            bytes: 1024,
+            sha256: Some("a".repeat(64)),
+            validator: None,
+        };
+        assert_eq!(download_remaining(&source, &path).await.unwrap(), 1024);
+        std::fs::write(partial_path(&path), vec![0; 400]).unwrap();
+        assert_eq!(download_remaining(&source, &path).await.unwrap(), 624);
+    }
+
+    #[tokio::test]
+    async fn queued_installation_can_be_cancelled_without_starting_network_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = Managed::with_custom_dir(directory.path().join("custom")).unwrap();
+        let operation = managed.inner.operation.lock().await;
+        let job = managed
+            .enqueue(InstallTask::Model(CATALOG[0].id.into()), |_| async {})
+            .await
+            .unwrap();
+        assert!(managed.cancel(&job.id).await);
+        drop(operation);
+        let error = managed.wait_job(&job.id).await.unwrap_err();
+        assert!(error.to_string().contains("cancel"));
+        assert_eq!(managed.job(&job.id).await.unwrap().state, "cancelled");
+    }
+
     async fn serve_download(
         body: Vec<u8>,
         status: &str,
@@ -1101,7 +1651,10 @@ mod tests {
         let managed = Managed::with_custom_dir(root.clone()).unwrap();
         let mut record = custom_record(&url, &body);
         assert!(managed.installed_custom_models().is_empty());
-        let installed = managed.ensure_custom_model(&mut record).await.unwrap();
+        let installed = managed
+            .ensure_custom_model(&mut record, &Arc::new(AtomicBool::new(false)))
+            .await
+            .unwrap();
         assert!(server.await.unwrap().starts_with("GET /chosen.gguf"));
         assert_eq!(installed.layers, 28);
         assert!(record.complete);
@@ -1142,7 +1695,7 @@ mod tests {
         let managed = Managed::with_custom_dir(directory.path().join("custom")).unwrap();
         let mut record = custom_record(&url, &body);
         assert!(managed
-            .ensure_custom_model(&mut record)
+            .ensure_custom_model(&mut record, &Arc::new(AtomicBool::new(false)))
             .await
             .unwrap_err()
             .to_string()
@@ -1487,10 +2040,16 @@ mod tests {
             ..CATALOG[0].clone()
         };
         let manager = Managed::new().unwrap();
-        manager.ensure_model_at(&model, &path).await.unwrap();
+        manager
+            .ensure_model_at(&model, &path, &Arc::new(AtomicBool::new(false)))
+            .await
+            .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), good);
         task.await.unwrap();
         // A second ensure succeeds offline using the validated local file.
-        manager.ensure_model_at(&model, &path).await.unwrap();
+        manager
+            .ensure_model_at(&model, &path, &Arc::new(AtomicBool::new(false)))
+            .await
+            .unwrap();
     }
 }

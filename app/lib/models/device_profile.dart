@@ -78,7 +78,7 @@ class DeviceProfile {
         final totalMb = total ~/ 1024;
         return (
           total: totalMb,
-          available: ((available ?? total) ~/ 1024).clamp(0, totalMb)
+          available: ((available ?? 0) ~/ 1024).clamp(0, totalMb)
         );
       }
     } catch (_) {

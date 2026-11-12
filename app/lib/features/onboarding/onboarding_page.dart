@@ -33,7 +33,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     'Choose a pinned GGUF, preview its placement, then download and run it on your devices.',
   ];
   static const _commands = [
-    '>_ privateml --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
+    '>_ localhostai --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
     '>_ laptop first\n\nLocal layers stay on the laptop.\nThe phone hosts only the remainder.',
     '>_ choose a model\n\npreview -> download -> verify\nload -> chat',
   ];

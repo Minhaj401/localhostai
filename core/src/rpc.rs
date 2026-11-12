@@ -17,6 +17,8 @@ pub struct WorkerReport {
     pub exit_code: Option<i32>,
     pub error: Option<String>,
     pub log_tail: Option<String>,
+    /// Resident anonymous pages that disappear when this worker process stops.
+    pub releasable_mb: Option<u64>,
 }
 
 impl WorkerReport {
@@ -27,6 +29,7 @@ impl WorkerReport {
             && matches!(self.state.as_str(), "running" | "stopped" | "error")
             && self.error.as_ref().is_none_or(|error| error.len() <= 8192)
             && self.log_tail.as_ref().is_none_or(|log| log.len() <= 8192)
+            && self.releasable_mb.is_none_or(|memory| memory <= 1_048_576)
     }
 }
 
@@ -85,7 +88,7 @@ pub async fn probe(address: &str) -> WorkerStatus {
         socket.read_exact(&mut reply).await?;
         let version = format!("{}.{}.{}", reply[0], reply[1], reply[2]);
         if reply[0] != 8 || reply[1] != 0 {
-            bail!("incompatible RPC {version}; install the matching PrivateLM phone worker (RPC 8.0.x)");
+            bail!("incompatible RPC {version}; install the matching localhost.ai phone worker (RPC 8.0.x)");
         }
         // Only one CPU device per endpoint is supported by the split mapping.
         socket.write_all(&[15, 0, 0, 0, 0, 0, 0, 0, 0]).await?;

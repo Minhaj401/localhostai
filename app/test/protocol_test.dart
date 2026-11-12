@@ -3,12 +3,12 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:privatelm_lan/models/chat_message.dart';
-import 'package:privatelm_lan/models/pairing.dart';
-import 'package:privatelm_lan/services/cloud_service.dart';
-import 'package:privatelm_lan/services/laptop_node_service.dart';
-import 'package:privatelm_lan/services/llm_backend.dart';
-import 'package:privatelm_lan/services/node_client.dart';
+import 'package:localhostai/models/chat_message.dart';
+import 'package:localhostai/models/pairing.dart';
+import 'package:localhostai/services/cloud_service.dart';
+import 'package:localhostai/services/laptop_node_service.dart';
+import 'package:localhostai/services/llm_backend.dart';
+import 'package:localhostai/services/node_client.dart';
 
 void main() {
   test('a disconnected chat stream is not a completed answer', () async {

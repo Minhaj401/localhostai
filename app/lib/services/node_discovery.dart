@@ -4,8 +4,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
 
-/// Finds PrivateLM-LAN nodes on the local network.
+/// Finds localhost.ai-LAN nodes on the local network.
 ///
 /// Two strategies, results merged:
 ///  1. UDP broadcast to :50897 (fast, but many APs / phones drop broadcasts)
@@ -14,9 +15,10 @@ import 'package:http/http.dart' as http;
 ///
 /// Web builds can't do either — the UI offers manual node entry there.
 class NodeDiscovery {
+  static const _channel = MethodChannel('localhostai/native');
   static const int discoveryPort = 50897;
   static const int nodePort = 8765;
-  static const String magic = 'PRIVATELM_DISCOVER';
+  static const String magic = 'LOCALHOSTAI_DISCOVER';
 
   Future<List<Map<String, dynamic>>> discover({
     Duration timeout = const Duration(seconds: 2),
@@ -96,22 +98,47 @@ class NodeDiscovery {
 
   /// Strategy 2: probe x.y.z.1–254 on [nodePort] for /health.
   Future<List<Map<String, dynamic>>> _scanSubnet() async {
-    final me = await _localIPv4();
+    final network = await _localNetwork();
+    final me = network.address;
     if (me == null) return [];
-    final octets = me.address.split('.');
+    final octets = me.split('.');
     if (octets.length != 4) return [];
-    final prefix = octets.sublist(0, 3).join('.');
+    final bits = network.prefix.clamp(22, 30);
+    final value =
+        octets.fold<int>(0, (value, octet) => (value << 8) | int.parse(octet));
+    final mask = (0xffffffff << (32 - bits)) & 0xffffffff;
+    final base = value & mask;
+    final count = 1 << (32 - bits);
 
     final client = http.Client();
     try {
-      final probes = <Future<Map<String, dynamic>?>>[];
-      for (var i = 1; i <= 254; i++) {
-        final ip = '$prefix.$i';
-        if (ip == me.address) continue;
-        probes.add(_probeHealth(client, ip));
+      final results = <Map<String, dynamic>>[];
+      final addresses = <String>[];
+      for (var i = 1; i < count - 1; i++) {
+        final number = base + i;
+        final ip =
+            '${number >> 24 & 255}.${number >> 16 & 255}.${number >> 8 & 255}.${number & 255}';
+        if (ip == me) continue;
+        addresses.add(ip);
       }
-      final results = await Future.wait(probes);
-      return results.whereType<Map<String, dynamic>>().toList();
+      for (var offset = 0; offset < addresses.length; offset += 128) {
+        final batch = addresses.skip(offset).take(128);
+        results.addAll((await Future.wait(
+                batch.map((ip) => _probeHealth(client, ip, nodePort))))
+            .whereType<Map<String, dynamic>>());
+        if (results.isNotEmpty) return results;
+      }
+      // Port fallback is bounded to the local /24-sized neighborhood. UDP QR
+      // discovery remains authoritative for wider networks and arbitrary ports.
+      for (var port = nodePort + 1;
+          port < nodePort + 10 && addresses.length <= 254;
+          port++) {
+        results.addAll((await Future.wait(
+                addresses.map((ip) => _probeHealth(client, ip, port))))
+            .whereType<Map<String, dynamic>>());
+        if (results.isNotEmpty) return results;
+      }
+      return results;
     } finally {
       // Future.timeout alone does not close the underlying HTTP sockets.
       client.close();
@@ -119,16 +146,16 @@ class NodeDiscovery {
   }
 
   Future<Map<String, dynamic>?> _probeHealth(
-      http.Client client, String ip) async {
+      http.Client client, String ip, int port) async {
     try {
       final r = await client
-          .get(Uri.parse('http://$ip:$nodePort/health'))
-          .timeout(const Duration(milliseconds: 900));
+          .get(Uri.parse('http://$ip:$port/health'))
+          .timeout(const Duration(milliseconds: 600));
       if (r.statusCode == 200) {
         final h = jsonDecode(r.body) as Map<String, dynamic>;
         if (h['name'] != null) {
           h['address'] = ip;
-          h['port'] = nodePort;
+          h['port'] = port;
           return h;
         }
       }
@@ -151,5 +178,21 @@ class NodeDiscovery {
       }
     } catch (_) {}
     return null;
+  }
+
+  Future<({String? address, int prefix})> _localNetwork() async {
+    if (Platform.isAndroid) {
+      try {
+        final value =
+            await _channel.invokeMapMethod<String, dynamic>('lanNetwork');
+        final address = value?['address'] as String?;
+        final prefix = value?['prefix'] as int?;
+        if (address != null && prefix != null) {
+          return (address: address, prefix: prefix);
+        }
+      } catch (_) {}
+    }
+    final address = await _localIPv4();
+    return (address: address?.address, prefix: 24);
   }
 }

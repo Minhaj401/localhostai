@@ -1,4 +1,4 @@
-# PrivateLM-LAN — Project Context (handoff)
+# localhost.ai-LAN — Project Context (handoff)
 
 Consolidated from pi session `01a1b628-6e8b-7302-8129-2cecf6013e96`
 (Nov 7 2026, cwd `~`, model `free-pi/glm-5.3-flash`).
@@ -10,10 +10,10 @@ User asked (session Nov 3/7): "what does cross-platform llm client do" →
 resources of laptop also" → "do it make the apk and tui version of it in
 laptop use rust for it".
 
-Inspiration: `~/projects/cross-platform-llm-client/` (a.k.a. **PrivateLM**) —
+Inspiration: `~/projects/cross-platform-llm-client/` (a.k.a. **localhost.ai**) —
 a Flutter on-device LLM chat client.
 
-### How PrivateLM splits work (the thing being cloned)
+### How localhost.ai splits work (the thing being cloned)
 - **GPU/CPU layer offload** in llama.cpp: `n_gpu_layers` — how many
   transformer layers run on GPU vs CPU, via `LlamaFlutterAndroidPlugin.kt`.
 - Coarse GPU eligibility gate `isGpuEligibleSoc()`: Android 12+, excludes
@@ -24,7 +24,7 @@ a Flutter on-device LLM chat client.
 
 ## What was built (all verified working at end of session)
 
-Repo: `~/projects/privatelm-lan/` (NOT a git repo yet).
+Repo: `~/projects/localhostai/` (NOT a git repo yet).
 
 ```
 laptop-node/    Python FastAPI node (runs on laptop)
@@ -52,10 +52,10 @@ app/            Flutter client (GetX: ui → controllers → services)
 tui/            Rust TUI (ratatui + crossterm + tokio + reqwest)
   main.rs/api.rs/app.rs/ui.rs
   `--once "prompt"` single-shot mode; ↑ model picker; Esc quits
-  PRIVATELM_NODE env var or URL arg to point at another node
+  LOCALHOSTAI_NODE env var or URL arg to point at another node
 phone-rpc/setup-termux.sh   (legacy path, superseded by in-APK worker)
 scripts/setup-distributed.sh
-PrivateLM-LAN.apk   21.9MB, see below
+localhost.ai-LAN.apk   21.9MB, see below
 ```
 
 ## Distributed inference (llama.cpp RPC) — verified end-to-end
@@ -70,7 +70,7 @@ PrivateLM-LAN.apk   21.9MB, see below
   `useLegacyPackaging = true` so it is extracted + executable.
   Android 10+ requires running it from the native lib dir (hence the
   Kotlin channel exposing `nativeLibDir`).
-- Device-tier thread logic copied from PrivateLM: 6/4/3/2 threads by RAM.
+- Device-tier thread logic copied from localhost.ai: 6/4/3/2 threads by RAM.
 - **No Termux needed** — the worker lives in the APK.
 
 ## Bugs found & fixed during the session (don't regress these)
@@ -132,13 +132,13 @@ PrivateLM-LAN.apk   21.9MB, see below
 
 ```bash
 # 1. laptop node (must be first)
-cd ~/projects/privatelm-lan/laptop-node && ./run.sh
+cd ~/projects/localhostai/laptop-node && ./run.sh
 curl http://localhost:8765/health
 
 # 2. TUI
-cd ~/projects/privatelm-lan/tui && source ~/.cargo/env
-./target/release/privatelm-tui              # interactive
-./target/release/privatelm-tui --once "hi"  # one shot
+cd ~/projects/localhostai/tui && source ~/.cargo/env
+./target/release/localhostai-tui              # interactive
+./target/release/localhostai-tui --once "hi"  # one shot
 ```
 
 ## Suggested next steps
@@ -163,8 +163,8 @@ So the Python node stopped being a thing anyone runs. The TUI binary now
 **is** the node. Layout became a Cargo workspace:
 
 ```
-core/   privateml-core (library — the node)
-tui/    privateml      (binary — UI + starts the node)
+core/   localhostai-core (library — the node)
+tui/    localhostai      (binary — UI + starts the node)
 ```
 
 No Python, no venv, no run.sh, no systemd unit, no second process, no
@@ -174,7 +174,7 @@ port/config drift between client and server.
 
 The binary manages its own engine. Ollama is used if it happens to be
 installed (detected), but a brand-new user should never need to install
-anything else: managed llama.cpp + GGUF downloads into `~/.privateml/models`
+anything else: managed llama.cpp + GGUF downloads into `~/.localhostai/models`
 is the target. This part is **not built yet** — currently the binary detects
 an existing Ollama/llama-server.
 
@@ -188,12 +188,12 @@ an existing Ollama/llama-server.
 | interactive TUI | ✅ (needs a real TTY) |
 | `/health` `/v1/models` `/v1/chat/completions` | ✅ SSE passthrough |
 | `/pair` `/pair/verify` + `--require-pairing` | ✅ 401 without token, 200 with |
-| config.toml + pair token in `~/.privateml` | ✅ 0600 token |
+| config.toml + pair token in `~/.localhostai` | ✅ 0600 token |
 | port auto-selection | ✅ first free ≥ 8765 |
 | UDP discovery | ✅ in-process; sandbox blocks bind but degrades |
 | engine re-probe | ✅ every 15s |
 
-Release binary: **5.4 MB**, `target/release/privateml`.
+Release binary: **5.4 MB**, `target/release/localhostai`.
 
 ## Bugs found by running it (do not regress)
 
@@ -206,7 +206,7 @@ Release binary: **5.4 MB**, `target/release/privateml`.
 4. No TTY crashed with a raw `ENXIO`. Now a readable hint naming `--status`.
 5. Unknown flags silently launched the UI. Now rejected with usage.
 6. No-backend chat tried `:8080` and reported a bare 502. Now 503 with
-   "start Ollama, PrivateLM picks it up within 15s".
+   "start Ollama, localhost.ai picks it up within 15s".
 7. JSON advert parse ignored `\"` escapes (caught by unit test).
    Parser now walks with escape handling.
 
@@ -296,7 +296,7 @@ reachability, heartbeat age, RPC address, and active layer/memory allocation.
 
 # Reliability pass — 0.2.1
 
-Current release versions: Rust `0.2.2`, localhost.ai Android `0.2.2+7`. See
+Historical release versions for this section: Rust `0.2.2`, localhost.ai Android `0.2.2+7`. See
 `PROJECT_GUIDE.md` for the current architecture; earlier phase roadmaps above
 describe historical states.
 
@@ -393,8 +393,9 @@ workers in these tests run on loopback; Android hardware testing is separate.
   status pulses and terminal typing. Tests use the requested four viewports,
   1.3x text, authenticated model-control ordering, stale-result guards, and
   snapshot retention. Preview images use mock coordinator data.
-- Backend executable, config locations, pairing URI scheme, Android application
-  ID, and release signing key retain compatibility with existing installs.
+- At that release, the backend executable, config locations, pairing URI scheme,
+  Android application ID, and signing key retained compatibility. The later
+  localhost.ai identity reset intentionally supersedes that compatibility.
 
 ## LAN pairing address correction
 
@@ -411,7 +412,7 @@ workers in these tests run on loopback; Android hardware testing is separate.
 
 ## RPC lifecycle investigation — 0.2.2 / Android +7
 
-- Reported incident: `~/.privateml/logs/cluster-502128-1.log`, Qwen 2.5 7B Q3,
+- Reported incident: `~/.localhostai/logs/cluster-502128-1.log`, Qwen 2.5 7B Q3,
   4096 context, 25 laptop blocks + 3 phone blocks. Load completed and three
   replies finished before a socket read failed during the fourth request.
   The old log cannot establish a phone kill/crash versus transport loss; the
@@ -446,7 +447,7 @@ workers in these tests run on loopback; Android hardware testing is separate.
   complete split GGUFs. `/models/browse` returns sources; `/managed/download`
   downloads/registers the chosen source. `/managed/install` also resumes or
   verifies saved custom IDs. Pairing applies to the new endpoints.
-- Custom manifests/files are stored under `~/.privateml/models/custom/` and
+- Custom manifests/files are stored under `~/.localhostai/models/custom/` and
   survive restart. Partial downloads stay available for retry, but do not enter
   `/models`. SHA-256, GGUF metadata, complete shard sets, and load-time planning
   remain authoritative. Unversioned direct links restart rather than splice
@@ -459,3 +460,35 @@ workers in these tests run on loopback; Android hardware testing is separate.
   CLI/PTY checks, and an isolated HTTP download/resume/restart test. Live Hugging
   Face search and nine real GGUF variants were checked without downloading their
   weights.
+
+## Reliability and security pass — 0.2.3 / Android +8
+
+- Fresh runtime installation follows validated HTTPS redirects and was checked
+  from an isolated empty home through GitHub download, checksum, extraction,
+  model-phase transition, and cancellation.
+- `/pair` and all controls require the pair token even on loopback. Browser
+  origins are rejected, connection/body/inference admission is bounded, and
+  response writes have deadlines.
+- Model sources are DNS-pinned at every hop; private, loopback, link-local,
+  metadata, documentation, benchmark, redirect-loop, and HTTPS-downgrade targets
+  are blocked unless a LAN host is explicitly trusted in config.
+- Linux cgroup limits and native platform memory probes cap placement. Swap,
+  zram, and PSI are reported separately. Replacement credit uses measured
+  anonymous RSS, not the planner estimate.
+- GGUF validation uses exact b12110 block layouts and records real per-layer and
+  coordinator tensor sizes. Placement reserves coordinator/native overhead and
+  honors model context metadata. Catalog KV estimates match their Qwen metadata.
+- Installation jobs are bounded, pollable, cancellable, and deadline-limited;
+  peak repair disk use is checked. Model deletion, runtime reset, log/peer
+  retention, and persisted device inclusion controls are exposed.
+- Android secrets use encrypted storage. The worker is hidden behind a native
+  source-IP gate for the paired coordinator, and sharing stops on severe thermal
+  pressure or critically low unplugged battery. Discovery uses the active LAN
+  prefix with bounded fallback ports.
+- Interrupted assistant text is retained and labelled. Laptop conversation
+  history is conservatively bounded by context, persisted history is capped,
+  and optional status failures retain healthy snapshots.
+- Verification: 125 Rust tests, 71 Flutter tests, strict Clippy/analysis, exact
+  b12110 Android worker build, cold runtime redirect/install test, lifecycle
+  checks, and real local/two-worker inference with reload, loss/recovery, polling,
+  heartbeat, SIGHUP, and SIGKILL cleanup.

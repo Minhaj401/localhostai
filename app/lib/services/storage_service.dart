@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/device_profile.dart';
 import '../models/pairing.dart';
 
@@ -9,19 +10,55 @@ import '../models/pairing.dart';
 class StorageService {
   static const _settingsBox = 'settings';
   static const _chatBox = 'chat';
+  static const _secretKeys = {
+    'pair_payload',
+    'pair_token',
+    'cloud_key',
+    'anthropic_key'
+  };
+  final FlutterSecureStorage _secure = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+  final Map<String, String> _secrets = {};
 
   Future<void> init() async {
     await Hive.initFlutter();
     await Hive.openBox(_settingsBox);
     await Hive.openBox(_chatBox);
+    final settings = Hive.box(_settingsBox);
+    for (final key in _secretKeys) {
+      var value = await _secure.read(key: key);
+      final legacy = settings.get(key) as String?;
+      if ((value == null || value.isEmpty) &&
+          legacy != null &&
+          legacy.isNotEmpty) {
+        value = legacy;
+        await _secure.write(key: key, value: value);
+      }
+      if (value != null && value.isNotEmpty) _secrets[key] = value;
+      if (settings.containsKey(key)) await settings.delete(key);
+    }
     if (getString('device_id') == null) {
       await setString('device_id', DeviceProfile.createId());
     }
   }
 
-  String? getString(String key) => Hive.box(_settingsBox).get(key) as String?;
-  Future<void> setString(String key, String value) =>
-      Hive.box(_settingsBox).put(key, value);
+  String? getString(String key) => _secretKeys.contains(key)
+      ? _secrets[key]
+      : Hive.box(_settingsBox).get(key) as String?;
+  Future<void> setString(String key, String value) async {
+    if (_secretKeys.contains(key)) {
+      if (value.isEmpty) {
+        _secrets.remove(key);
+        await _secure.delete(key: key);
+      } else {
+        _secrets[key] = value;
+        await _secure.write(key: key, value: value);
+      }
+      return;
+    }
+    await Hive.box(_settingsBox).put(key, value);
+  }
 
   PairPayload? loadPair() {
     final raw = getString('pair_payload');
@@ -64,8 +101,28 @@ class StorageService {
     return raw.cast<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
   }
 
-  Future<void> saveMessages(List<Map<String, dynamic>> messages) =>
-      Hive.box(_chatBox).put('messages', messages);
+  Future<void> saveMessages(List<Map<String, dynamic>> messages) {
+    const maximumBytes = 2 * 1024 * 1024;
+    final retained = <Map<String, dynamic>>[];
+    var bytes = 0;
+    for (final message in messages.reversed) {
+      var stored = message;
+      var size = utf8.encode(jsonEncode(stored)).length;
+      if (size > maximumBytes && retained.isEmpty) {
+        final content = '${stored['content'] ?? ''}';
+        stored = {
+          ...stored,
+          'content':
+              '${content.substring(0, content.length.clamp(0, 256 * 1024))}\n\n[message truncated for local history storage]'
+        };
+        size = utf8.encode(jsonEncode(stored)).length;
+      }
+      if (retained.length >= 200 || bytes + size > maximumBytes) break;
+      retained.add(stored);
+      bytes += size;
+    }
+    return Hive.box(_chatBox).put('messages', retained.reversed.toList());
+  }
 
   Future<void> clearMessages() => Hive.box(_chatBox).delete('messages');
 }

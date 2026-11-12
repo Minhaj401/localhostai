@@ -30,7 +30,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
         _nodeClient = nodeClient ?? ((pair) => NodeClient(pair)),
         _androidProtection = androidProtection ?? Platform.isAndroid;
 
-  static const _channel = MethodChannel('privatelm/native');
+  static const _channel = MethodChannel('localhostai/native');
   static const defaultPort = 50052;
   static const _lastFallbackPort = 50062;
   final Future<Process> Function(
@@ -52,6 +52,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
   Future<void>? _starting;
   Future<void>? _stopping;
   Future<void> _reportingStopped = Future<void>.value();
+  Timer? _resourceMonitor;
   int _epoch = 0;
   NodeClient? _reporter;
   DeviceProfile? _profile;
@@ -68,7 +69,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
       .invokeMethod<String>('localIp')
       .timeout(const Duration(seconds: 3));
 
-  Future<void> start() async {
+  Future<void> start({String? allowedPeer}) async {
     final requestedEpoch = _epoch;
     if (_stopping != null) await _stopping;
     if (_exiting != null) await _exiting;
@@ -76,7 +77,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
     if (_starting != null) return _starting!;
     if (requestedEpoch != _epoch) throw StateError('worker start cancelled');
     if (isRunning) return;
-    final pending = _start(++_epoch);
+    final pending = _start(++_epoch, allowedPeer);
     _starting = pending;
     try {
       await pending;
@@ -85,13 +86,14 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _start(int epoch) async {
+  Future<void> _start(int epoch, String? allowedPeer) async {
     state.value = 'starting';
     lastFailure = null;
     _lastExitCode = null;
     nativeOutput = '';
     _stopReason = 'Sharing stopped by the user';
     try {
+      await _checkResources(starting: true);
       await _beginProtection();
       final libDir = await _channel
           .invokeMethod<String>('nativeLibDir')
@@ -124,6 +126,12 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
             '0.0.0.0',
             '--port',
             '$candidate',
+            if (allowedPeer != null) ...[
+              '--allow-peer',
+              allowedPeer,
+              '--upstream-port',
+              '${candidate + 10000}',
+            ],
             '-t',
             '${profile.threads}',
             '--device',
@@ -252,7 +260,16 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
     joining.value = true;
     var epoch = _epoch;
     try {
-      await start();
+      String? allowedPeer;
+      if (_androidProtection) {
+        final addresses = await InternetAddress.lookup(pair.host,
+            type: InternetAddressType.IPv4);
+        allowedPeer = addresses.firstOrNull?.address;
+        if (allowedPeer == null) {
+          throw StateError('Could not resolve the paired laptop to IPv4');
+        }
+      }
+      await start(allowedPeer: allowedPeer);
       epoch = _epoch;
       final ip = await localIp();
       if (ip == null || ip.isEmpty) {
@@ -295,6 +312,10 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
           },
           workerReport: () => _workerReport('running'));
       sharing.value = true;
+      _resourceMonitor?.cancel();
+      _resourceMonitor = Timer.periodic(const Duration(seconds: 15), (_) {
+        unawaited(_checkResources().catchError((_) {}));
+      });
     } catch (_) {
       if (epoch == _epoch) await stop();
       rethrow;
@@ -308,6 +329,8 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
   }
 
   Future<void> _stop() async {
+    _resourceMonitor?.cancel();
+    _resourceMonitor = null;
     final epoch = ++_epoch;
     final process = _proc;
     _proc = null;
@@ -356,7 +379,40 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
         if (_lastExitCode != null) 'exit_code': _lastExitCode,
         if (reason != null) 'error': _reportText(reason),
         if (nativeOutput.isNotEmpty) 'log_tail': _reportText(nativeOutput),
+        if (_proc != null) 'releasable_mb': _processAnonymousMb(_proc!.pid),
       };
+
+  static int _processAnonymousMb(int pid) {
+    try {
+      final status = File('/proc/$pid/status').readAsStringSync();
+      final line =
+          status.split('\n').firstWhere((line) => line.startsWith('RssAnon:'));
+      return (int.tryParse(line.split(RegExp(r'\s+'))[1]) ?? 0) ~/ 1024;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<void> _checkResources({bool starting = false}) async {
+    if (!_androidProtection) return;
+    final value = await _channel
+        .invokeMapMethod<String, dynamic>('powerState')
+        .timeout(const Duration(seconds: 3));
+    if (value == null) return;
+    final thermal = value['thermal_status'] as int? ?? 0;
+    final battery = value['battery_percent'] as int? ?? -1;
+    final powered = value['powered'] == true;
+    final reason = thermal >= 3
+        ? 'Phone sharing stopped because Android reported severe thermal pressure.'
+        : (!powered && battery >= 0 && battery <= (starting ? 15 : 10))
+            ? 'Phone sharing stopped to protect a low battery. Connect power and try again.'
+            : null;
+    if (reason == null) return;
+    lastFailure = reason;
+    _stopReason = reason;
+    if (!starting && isRunning) await stop();
+    throw StateError(reason);
+  }
 
   static String _reportText(String text) =>
       text.length <= 2048 ? text : text.substring(text.length - 2048);
@@ -500,6 +556,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
 
   @override
   void onClose() {
+    _resourceMonitor?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     if (_androidProtection) _channel.setMethodCallHandler(null);
     unawaited(stop());

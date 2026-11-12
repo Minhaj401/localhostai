@@ -1,11 +1,11 @@
 /// Pairing payload carried by the QR code.
 ///
-/// The laptop renders a QR containing a `privateml://pair?...` URI. Scanning it
+/// The laptop renders a QR containing a `localhostai://pair?...` URI. Scanning it
 /// is the only setup step a user performs: address, port and secret all arrive
 /// in one string, so there is no manual IP typing and no shared-key copying.
 ///
 /// Format (must match `core/src/qr.rs`):
-///   privateml://pair?h=<host>&p=<port>&t=<token>&n=<name>
+///   localhostai://pair?h=<host>&p=<port>&t=<token>&n=<name>
 class PairPayload {
   final String host;
   final int port;
@@ -36,17 +36,17 @@ class PairPayload {
     }
   }
 
-  String toUri() => 'privateml://pair?h=${Uri.encodeComponent(host)}'
+  String toUri() => 'localhostai://pair?h=${Uri.encodeComponent(host)}'
       '&p=$port'
       '&t=${Uri.encodeComponent(token)}'
       '&n=${Uri.encodeComponent(name)}';
 
   /// Parse a scanned string. Returns null when it is not a pairing URI, so the
-  /// caller can show "that is not a PrivateLM code" instead of crashing.
+  /// caller can show "that is not a localhost.ai code" instead of crashing.
   static PairPayload? tryParse(String raw) {
     try {
       final uri = Uri.parse(raw.trim());
-      if (uri.scheme != 'privateml' ||
+      if (uri.scheme != 'localhostai' ||
           uri.host != 'pair' ||
           uri.path.isNotEmpty ||
           uri.userInfo.isNotEmpty ||

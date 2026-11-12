@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(privateml-phone-worker LANGUAGES C CXX)
+project(localhostai-phone-worker LANGUAGES C CXX)
 
 if(NOT LLAMA_CPP_DIR)
     message(FATAL_ERROR "Set LLAMA_CPP_DIR to the pinned llama.cpp source tree")
@@ -9,5 +9,5 @@ if(NOT TARGET ggml-rpc-server)
     add_subdirectory("${LLAMA_CPP_DIR}/tools/rpc" rpc-worker)
     set_target_properties(ggml-rpc-server PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 endif()
-target_compile_definitions(ggml-rpc-server PRIVATE main=privateml_rpc_main)
+target_compile_definitions(ggml-rpc-server PRIVATE main=localhostai_rpc_main)
 target_sources(ggml-rpc-server PRIVATE worker-lifecycle.cpp)

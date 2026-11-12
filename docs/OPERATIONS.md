@@ -2,13 +2,13 @@
 
 [Back to the project overview](../README.md)
 
-**Run AI Locally.** The localhost.ai Flutter app connects to the PrivateLM Rust
+**Run AI Locally.** The localhost.ai Flutter app connects to the localhost.ai Rust
 coordinator: your laptop and your phone, one private LLM. Install the terminal
 binary and the APK, then pair them over your LAN.
 
 ```
   ┌──────────────────────────────┐            ┌──────────────────────────┐
-  │  privateml  (this binary)    │   LAN HTTP │  localhost.ai (phone)    │
+  │  localhostai  (this binary)    │   LAN HTTP │  localhost.ai (phone)    │
   │                              │ ◄───────── │  chat UI                 │
   │  chat UI in your terminal    │            │  + compute worker        │
   │  + embedded node:            │            │    (libggmlrpc.so)       │
@@ -20,7 +20,7 @@ binary and the APK, then pair them over your LAN.
 ```
 
 The laptop node is **not a service you run**. It is a task inside the
-`privateml` process, so `privateml` gives you a chat UI *and* makes this
+`localhostai` process, so `localhostai` gives you a chat UI *and* makes this
 machine available to your phone at the same time.
 
 For architecture, data flow, APIs, security, resource planning, development,
@@ -31,13 +31,13 @@ The Flutter visual contract is [`app/DESIGN_FLUTTER.md`](../app/DESIGN_FLUTTER.m
 
 ```bash
 cargo build --release
-./target/release/privateml
+./target/release/localhostai
 ```
 
 On first run the model picker opens automatically. Choose a model and press
-**Enter**. PrivateLM then:
+**Enter**. localhost.ai then:
 
-1. creates `~/.privateml/` (config + pair token) on first run
+1. creates `~/.localhostai/` (config + pair token) on first run
 2. downloads a pinned, checksummed llama.cpp runtime when needed
 3. downloads and verifies the selected GGUF with resumable progress
 4. starts llama-server itself and opens chat
@@ -57,7 +57,7 @@ Starter models:
 | Qwen 2.5 Coder 7B Instruct Q4_K_M | 4.36 GiB | Apache-2.0 | coding model for larger memory pools |
 
 The 7B options require substantially more free RAM than their download size
-once context and native runtime buffers are included. PrivateLM will refuse to
+once context and native runtime buffers are included. localhost.ai will refuse to
 start them unless the current laptop/phone plan can place every layer safely.
 
 ### Download your own models
@@ -79,7 +79,7 @@ GGUF. The planner counts the combined shard size. Direct links must report a
 file size; their downloads resume when a checksum or HTTP validator is available,
 and otherwise restart safely. Hugging Face `blob` links are accepted too.
 
-Custom downloads and source records live in `~/.privateml/models/custom/`.
+Custom downloads and source records live in `~/.localhostai/models/custom/`.
 Incomplete downloads remain in the library for retry (**I** in the TUI).
 Completed files are checked as GGUFs, receive stored checksums, and are registered
 automatically after a restart. Select the installed model to preview memory fit
@@ -100,20 +100,20 @@ the node is configured to allow unauthenticated chat.
 
 | Command | What it does |
 |---|---|
-| `privateml` | node + interactive chat UI |
-| `privateml --status` | print address, backend, models, pairing — then exit |
-| `privateml --headless` | node only, no UI (SSH, systemd, servers) |
-| `privateml --once "hello"` | one streamed reply from an already active backend |
-| `privateml --port 9000` | prefer this port, trying the next free one if occupied |
-| `privateml --name "studio"` | name shown on the phone |
-| `privateml --require-pairing` | make the pair token mandatory |
-| `privateml --no-lan` | loopback only, phone cannot connect |
-| `privateml --no-discovery` | don't answer UDP broadcasts |
-| `privateml --connect http://HOST:PORT` | use an existing node; also supports `--once` and `--status` |
+| `localhostai` | node + interactive chat UI |
+| `localhostai --status` | print address, backend, models, pairing — then exit |
+| `localhostai --headless` | node only, no UI (SSH, systemd, servers) |
+| `localhostai --once "hello"` | one streamed reply from an already active backend |
+| `localhostai --port 9000` | prefer this port, trying the next free one if occupied |
+| `localhostai --name "studio"` | name shown on the phone |
+| `localhostai --require-pairing` | make the pair token mandatory |
+| `localhostai --no-lan` | loopback only, phone cannot connect |
+| `localhostai --no-discovery` | don't answer UDP broadcasts |
+| `localhostai --connect http://HOST:PORT` | use an existing node; also supports `--once` and `--status` |
 
 In the UI: type → **Enter** to send · **↑** model picker · **F1** help ·
 **Ctrl+A** activity · **Ctrl+X** stop generation/model · **Ctrl+D** devices ·
-**Ctrl+P** pairing QR · **Esc** to quit. Set `PRIVATELM_TOKEN` when connecting
+**Ctrl+P** pairing QR · **Esc** to quit. Set `LOCALHOSTAI_TOKEN` when connecting
 to a remote node that requires pairing.
 
 The model picker previews fit before downloading, including estimated per-device
@@ -130,11 +130,11 @@ current response; it takes effect the next time a model is loaded.
 ## Files
 
 ```
-~/.privateml/config.toml   settings (node_name, port, engine, ...)
-~/.privateml/pair_token    shared secret the phone must present
-~/.privateml/models/       downloaded GGUF models
-~/.privateml/bin/          managed llama.cpp runtime
-~/.privateml/logs/
+~/.localhostai/config.toml   settings (node_name, port, engine, ...)
+~/.localhostai/pair_token    shared secret the phone must present
+~/.localhostai/models/       downloaded GGUF models
+~/.localhostai/bin/          managed llama.cpp runtime
+~/.localhostai/logs/
 ```
 
 ## Node API
@@ -173,13 +173,13 @@ curl -X POST localhost:8765/v1/chat/completions \
 
 ## Engines
 
-The default engine is **managed**. PrivateLM installs llama.cpp and owns its
+The default engine is **managed**. localhost.ai installs llama.cpp and owns its
 process lifecycle; exiting the TUI stops the managed processes. Ctrl+C, SIGTERM,
 and terminal hangup also clean up the model process. On Linux, a kernel
 parent-death guard releases it even if the node crashes or is forcibly killed.
 
 Pinned runtime downloads currently support Linux x86_64/ARM64 and macOS
-x86_64/ARM64. Set both `PRIVATELM_LLAMA_SERVER` and `PRIVATELM_RPC_SERVER`
+x86_64/ARM64. Set both `LOCALHOSTAI_LLAMA_SERVER` and `LOCALHOSTAI_RPC_SERVER`
 to use compatible custom binaries instead.
 
 Ollama and an external llama-server remain optional compatibility backends.
@@ -206,8 +206,8 @@ It also leaves 256 MiB of each remote budget for native RPC overhead. The phone
 worker caches eligible weight tensors in Android's private cache so retries and
 reloads can avoid transferring the same data again.
 
-You can still drop another GGUF into `~/.privateml/models/` and restart, or
-register it with `POST /models`. PrivateLM reads the real transformer block
+You can still drop another GGUF into `~/.localhostai/models/` and restart, or
+register it with `POST /models`. localhost.ai reads the real transformer block
 count and attention metadata from the file before planning. Memory placement
 remains an estimate; supplied layer counts must match the GGUF.
 
@@ -216,7 +216,7 @@ device count. Workers already used by a cluster are not repeatedly probed throug
 their single-client socket. If a worker disappears, the failed run is removed
 from health/model listings and its error identifies the RPC endpoints.
 
-Each model load writes a separate `~/.privateml/logs/cluster-<pid>-<run>.log`;
+Each model load writes a separate `~/.localhostai/logs/cluster-<pid>-<run>.log`;
 the exact path is shown in the error and `GET /cluster`. Model reloads account
 for the previous run's releasable memory instead of requiring space for two runs.
 
@@ -249,14 +249,14 @@ the laptop binary, restart sharing, and reload the model.
 ## Repository layout
 
 ```
-core/          privateml-core — the node, as a library
+core/          localhostai-core — the node, as a library
   config.rs    config.toml, dirs, pair token, port selection
   discovery.rs UDP responder + probe (phone finds this machine)
   managed.rs   checksummed runtime/model catalog + resumable downloads
   model_hub.rs Hugging Face search, GGUF choices, and direct-link metadata
   server.rs    HTTP node: health, models, SSE chat, pairing
   api.rs       client used by the UI and tests
-tui/           privateml — the binary: UI + node wiring
+tui/           localhostai — the binary: UI + node wiring
 app/           Flutter APK (chat UI + compute worker)
 laptop-node/   legacy Python node — superseded by core/, kept for reference
 phone-rpc/     native worker lifecycle wrapper + legacy Termux reference
@@ -287,8 +287,8 @@ recovery, and shutdown cleanup with an existing GGUF:
 ```bash
 python3 scripts/check-inference.py \
   --model /path/to/model.gguf \
-  --llama-server ~/.privateml/bin/llama-b12110/llama-server \
-  --rpc-server ~/.privateml/bin/llama-b12110/ggml-rpc-server
+  --llama-server ~/.localhostai/bin/llama-b12110/llama-server \
+  --rpc-server ~/.localhostai/bin/llama-b12110/ggml-rpc-server
 ```
 
 The RPC workers in this test run on loopback as phone stand-ins.

@@ -1,6 +1,6 @@
-import 'package:privatelm_lan/models/chat_message.dart';
-import 'package:privatelm_lan/services/llm_backend.dart';
-import 'package:privatelm_lan/services/storage_service.dart';
+import 'package:localhostai/models/chat_message.dart';
+import 'package:localhostai/services/llm_backend.dart';
+import 'package:localhostai/services/storage_service.dart';
 
 class MemoryStorage extends StorageService {
   final settings = <String, String>{};
@@ -27,10 +27,16 @@ class MemoryStorage extends StorageService {
 }
 
 class FakeBackend extends LlmBackend {
-  FakeBackend({this.ready, this.reply = 'reply', this.id = 'cloud'});
+  FakeBackend(
+      {this.ready,
+      this.reply = 'reply',
+      this.id = 'cloud',
+      this.failAfterReply = false});
   final Future<void>? ready;
   final String reply;
   bool disposed = false;
+  final bool failAfterReply;
+  List<ChatMessage> received = const [];
   @override
   final String id;
   @override
@@ -49,7 +55,9 @@ class FakeBackend extends LlmBackend {
   @override
   Stream<StreamChunk> chat(List<ChatMessage> messages,
       {String? systemPrompt}) async* {
+    received = messages;
     yield StreamChunk(reply);
+    if (failAfterReply) throw StateError('transport interrupted');
     yield const StreamChunk('', done: true);
   }
 

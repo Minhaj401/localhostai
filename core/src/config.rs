@@ -1,6 +1,6 @@
 //! Configuration, directories and identity.
 //!
-//! Everything lives under `~/.privateml/` (override with `PRIVATELM_HOME`):
+//! Everything lives under `~/.localhostai/` (override with `LOCALHOSTAI_HOME`):
 //!   config.toml   user settings
 //!   pair_token    shared secret the APK must present (generated on first run)
 //!   models/       downloaded GGUFs
@@ -35,6 +35,8 @@ pub struct Config {
     pub ctx: u32,
     /// Require the pair token on every request.
     pub require_pairing: bool,
+    /// Explicit trusted exceptions to public-only model download destinations.
+    pub allowed_model_hosts: Vec<String>,
 }
 
 impl Default for Config {
@@ -49,13 +51,14 @@ impl Default for Config {
             llamacpp_url: None,
             default_model: None,
             ctx: 4096,
-            require_pairing: false,
+            require_pairing: true,
+            allowed_model_hosts: Vec::new(),
         }
     }
 }
 
 fn default_node_name() -> String {
-    if let Ok(h) = std::env::var("PRIVATELM_NODE_NAME") {
+    if let Ok(h) = std::env::var("LOCALHOSTAI_NODE_NAME") {
         return h;
     }
     std::fs::read_to_string("/etc/hostname")
@@ -68,13 +71,13 @@ fn default_node_name() -> String {
 
 /// Resolved home directory (created on demand).
 pub fn home() -> PathBuf {
-    if let Ok(h) = std::env::var("PRIVATELM_HOME") {
+    if let Ok(h) = std::env::var("LOCALHOSTAI_HOME") {
         return PathBuf::from(h);
     }
     let base = std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.join(".privateml")
+    base.join(".localhostai")
 }
 
 pub fn models_dir() -> PathBuf {
@@ -94,6 +97,28 @@ pub fn pair_token_path() -> PathBuf {
 }
 pub fn db_path() -> PathBuf {
     home().join("history.db")
+}
+pub fn device_state_path() -> PathBuf {
+    home().join("devices.json")
+}
+
+pub fn load_device_state() -> std::collections::HashMap<String, bool> {
+    std::fs::read(device_state_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_device_state(state: &std::collections::HashMap<String, bool>) -> Result<()> {
+    save_device_state_at(&device_state_path(), state)
+}
+
+pub fn save_device_state_at(
+    path: &Path,
+    state: &std::collections::HashMap<String, bool>,
+) -> Result<()> {
+    atomic_write(path, &serde_json::to_vec_pretty(state)?)?;
+    Ok(())
 }
 
 impl Config {
@@ -134,13 +159,21 @@ impl Config {
                 bail!("engine URL must be an HTTP(S) address: {url}");
             }
         }
+        for host in &self.allowed_model_hosts {
+            if host.is_empty()
+                || host.len() > 512
+                || host.contains(['/', '\\', '@', ' ', '\n', '\r'])
+            {
+                bail!("allowed_model_hosts entries must be hostnames/IPs with an optional :port");
+            }
+        }
         Ok(())
     }
 
     pub fn save(&self) -> Result<()> {
         self.validate()?;
         fs::create_dir_all(home())?;
-        let mut out = String::from("# PrivateLM node configuration\n");
+        let mut out = String::from("# localhost.ai node configuration\n");
         out.push_str(&toml::to_string_pretty(self)?);
         atomic_write(&config_path(), out.as_bytes())?;
         Ok(())

@@ -94,6 +94,9 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
   String get installPhase =>
       (managed?['status'] as Map?)?['phase'] as String? ?? 'idle';
   bool get installing => [
+        'queued',
+        'preparing',
+        'resolving_model',
         'downloading_runtime',
         'installing_runtime',
         'downloading_model',
@@ -113,6 +116,8 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> restore() async {
     if (_disposed) return;
+    contextTokens =
+        int.tryParse(storage.getString('context_tokens') ?? '') ?? 4096;
     final saved = storage.loadPair();
     if (saved != null) {
       pair = saved;
@@ -234,36 +239,43 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _refresh() async {
+    Future<T?> optional<T>(Future<T> request) async {
+      try {
+        return await request;
+      } catch (_) {
+        return null;
+      }
+    }
+
     final client = _client!;
     final epoch = _epoch;
     final revision = _revision;
     refreshing = true;
     notifyListeners();
     try {
-      final values = await Future.wait<Object?>([
-        client.health(),
-        client.clusterStatus(),
-        client.peers(),
-        client.managedStatus(),
-        client.registeredModels(),
-      ]);
+      final health = await client.health();
       if (_disposed || epoch != _epoch || revision != _revision) return;
-      final health = values[0] as NodeInfo?;
       if (health == null) {
         throw StateError(
             'Laptop offline. Last known model and device information is retained.');
       }
-      final status = values[1] as Map<String, dynamic>?;
-      if (status == null) {
-        throw StateError(
-            'Cannot read coordinator controls. Check the pairing token.');
-      }
+      final values = await Future.wait<Object?>([
+        client.clusterStatus(),
+        client.peers(),
+        optional(client.managedStatus()),
+        optional(client.registeredModels()),
+      ]);
+      if (_disposed || epoch != _epoch || revision != _revision) return;
+      final status = values[0] as Map<String, dynamic>?;
       final before = clusterState;
       info = health;
       connected = true;
-      cluster = status;
-      devices = values[2] as List<PoolDevice>;
-      managed = values[3] as Map<String, dynamic>;
+      if (status != null) cluster = status;
+      final nextDevices = values[1] as List<PoolDevice>;
+      if (nextDevices.isNotEmpty) devices = nextDevices;
+      final nextManaged = values[2] as Map<String, dynamic>?;
+      if (nextManaged != null) managed = nextManaged;
+      client.adoptInstallJob(nextManaged);
       final catalog = [
         ...(managed?['catalog'] as List? ?? const []),
         ...(managed?['custom'] as List? ?? const []),
@@ -272,13 +284,14 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
           .map((value) =>
               ManagedModel.fromCatalog(Map<String, dynamic>.from(value)))
           .toList();
-      for (final value in values[4] as List<Map<String, dynamic>>) {
+      for (final value
+          in (values[3] as List<Map<String, dynamic>>? ?? const [])) {
         final name = value['name'];
         if (name is String && !catalog.any((model) => model.id == name)) {
           catalog.add(ManagedModel.fromRegistered(value));
         }
       }
-      models = catalog;
+      if (catalog.isNotEmpty) models = catalog;
       if (!models.any((model) => model.id == selectedModel)) {
         selectedModel = runningModel ??
             models
@@ -291,7 +304,10 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
                 .firstOrNull ??
             models.firstOrNull?.id;
       }
-      error = worker.lastFailure;
+      error = worker.lastFailure ??
+          (status == null || nextManaged == null
+              ? 'Connected, but some coordinator details are temporarily unavailable. Retaining the last snapshot.'
+              : null);
       if (before != clusterState) {
         _record(
             'model ${clusterState.toLowerCase()}${runningModel == null ? '' : ': $runningModel'}');
@@ -322,6 +338,7 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
     _previewId++;
     contextTokens = value;
     lastPlan = null;
+    unawaited(storage.setString('context_tokens', '$value'));
     notifyListeners();
   }
 
@@ -483,6 +500,70 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Future<void> cancelOperation() async {
+    if (_client == null || !installing) return;
+    operationMessage = 'Cancelling installation...';
+    notifyListeners();
+    if (!await _client!.cancelInstall()) {
+      operationError =
+          'Could not cancel the active installation. It may have already finished.';
+      operationMessage = operationError;
+    } else {
+      operationMessage =
+          'Installation cancelled. Partial download data was retained.';
+      operationError = null;
+    }
+    await refresh();
+  }
+
+  Future<bool> deleteModel(ManagedModel model) async {
+    if (_client == null || operationBusy || runningModel == model.id) {
+      return false;
+    }
+    operationBusy = true;
+    operationMessage = 'Deleting ${model.name}...';
+    operationError = null;
+    notifyListeners();
+    try {
+      await _client!.deleteModel(model.id);
+      if (selectedModel == model.id) selectedModel = null;
+      operationMessage = '${model.name} was removed from this laptop.';
+      await refresh();
+      return true;
+    } catch (failure) {
+      operationError = cleanError(failure);
+      operationMessage = operationError;
+      return false;
+    } finally {
+      operationBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> reinstallRuntime() async {
+    if (_client == null || operationBusy || clusterState == 'running') {
+      return false;
+    }
+    operationBusy = true;
+    operationMessage = 'Removing the managed runtime...';
+    operationError = null;
+    notifyListeners();
+    try {
+      await _client!.resetRuntime();
+      operationMessage =
+          'Runtime reset. The next model load installs the pinned runtime again.';
+      await refresh();
+      return true;
+    } catch (failure) {
+      operationError = cleanError(failure);
+      operationMessage = operationError;
+      return false;
+    } finally {
+      operationBusy = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> sharePhone(bool enabled) async {
     if (sharingBusy) return;
     _revision++;
@@ -517,6 +598,7 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
     activeOperationModel = null;
     operationMessage = null;
     operationError = null;
+    if (_client?.activeInstallJob != null) await _client!.cancelInstall();
     await worker.stop();
     _epoch++;
     _client?.dispose();

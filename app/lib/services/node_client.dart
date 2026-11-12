@@ -7,6 +7,14 @@ import '../models/device_profile.dart';
 import '../models/pairing.dart';
 import '../models/remote_model.dart';
 
+class NodeHttpException implements Exception {
+  const NodeHttpException(this.status, this.message);
+  final int status;
+  final String message;
+  @override
+  String toString() => message;
+}
+
 /// A node with its health, for the picker.
 class NodeInfo {
   final String baseUrl;
@@ -48,6 +56,8 @@ class PoolDevice {
   final bool? reportedUsable;
   final bool inUse;
   final String? reason;
+  final int swapUsedMb;
+  final double pressureFullAvg10;
 
   const PoolDevice({
     this.id = '',
@@ -68,6 +78,8 @@ class PoolDevice {
     this.reportedUsable,
     this.inUse = false,
     this.reason,
+    this.swapUsedMb = 0,
+    this.pressureFullAvg10 = 0,
   });
 
   /// Layers can only be placed where a worker answers.
@@ -95,6 +107,12 @@ class PoolDevice {
         reportedUsable: j['usable'] as bool?,
         inUse: j['in_use'] == true,
         reason: j['reason'] as String?,
+        swapUsedMb:
+            ((j['memory'] as Map?)?['swap_used_mb'] as num?)?.toInt() ?? 0,
+        pressureFullAvg10:
+            ((j['memory'] as Map?)?['pressure_full_avg10'] as num?)
+                    ?.toDouble() ??
+                0,
       );
 }
 
@@ -172,6 +190,7 @@ class NodeClient {
   int _heartbeatEpoch = 0;
   int _reportSequence = 0;
   String? lastPeerError;
+  String? activeInstallJob;
 
   NodeClient(this.pair,
       {http.Client? client,
@@ -418,8 +437,9 @@ class NodeClient {
 
   Future<void> installModel(String id) async {
     final value = await _json('/managed/install',
-        body: {'model': id}, timeout: const Duration(hours: 2));
-    if (value['ok'] != true) throw StateError(_errorMessage(value['error']));
+        body: {'model': id, 'async': true},
+        timeout: const Duration(seconds: 30));
+    await _waitInstall(value);
   }
 
   Future<HubResults> browseModels(String query) async => HubResults.fromJson(
@@ -429,14 +449,102 @@ class NodeClient {
 
   Future<String> downloadModel(RemoteModel model) async {
     final value = await _json('/managed/download',
-        body: {'source': model.source}, timeout: const Duration(hours: 2));
-    if (value['ok'] != true) throw StateError(_errorMessage(value['error']));
-    final name = (value['model'] as Map?)?['name'];
+        body: {'source': model.source, 'async': true},
+        timeout: const Duration(seconds: 30));
+    final result = await _waitInstall(value);
+    final name = (result['result'] as Map?)?['name'];
     if (name is! String || name.isEmpty) {
       throw const FormatException(
           'The coordinator did not return the downloaded model');
     }
     return name;
+  }
+
+  Future<Map<String, dynamic>> _waitInstall(
+      Map<String, dynamic> accepted) async {
+    final job = accepted['job'];
+    final id = job is Map ? job['id'] : null;
+    if (id is! String || id.isEmpty) {
+      throw StateError(_errorMessage(accepted['error'] ??
+          'The coordinator did not create an installation job'));
+    }
+    activeInstallJob = id;
+    final deadline = DateTime.now().add(const Duration(hours: 2));
+    var terminal = false;
+    try {
+      while (DateTime.now().isBefore(deadline)) {
+        Map<String, dynamic> value;
+        try {
+          value = await _json('/managed/jobs/${Uri.encodeComponent(id)}',
+              timeout: const Duration(seconds: 12));
+        } on NodeHttpException catch (error) {
+          if (error.status == 404) {
+            terminal = true;
+            throw StateError(
+                'The coordinator restarted and no longer knows this installation job. Retry the model to resume its saved partial download.');
+          }
+          if (error.status >= 400 && error.status < 500) {
+            terminal = true;
+            throw StateError(error.message);
+          }
+          await Future<void>.delayed(const Duration(seconds: 2));
+          continue;
+        } catch (_) {
+          // A transient poll failure must not orphan a server-side job or make
+          // it impossible for the user to cancel it.
+          await Future<void>.delayed(const Duration(seconds: 2));
+          continue;
+        }
+        final current = value['job'];
+        if (current is! Map) {
+          throw const FormatException('Invalid installation status');
+        }
+        final state = current['state'];
+        if (state == 'succeeded') {
+          terminal = true;
+          return Map<String, dynamic>.from(current);
+        }
+        if (state == 'failed' || state == 'cancelled') {
+          terminal = true;
+          throw StateError(
+              _errorMessage(current['error'] ?? 'Installation $state'));
+        }
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      throw StateError(
+          'Installation exceeded its two-hour operation deadline. Retry to resume the saved partial download.');
+    } finally {
+      if (terminal && activeInstallJob == id) activeInstallJob = null;
+    }
+  }
+
+  void adoptInstallJob(Map<String, dynamic>? managed) {
+    final jobs = managed?['jobs'] as List? ?? const [];
+    final active = jobs
+        .whereType<Map>()
+        .where((job) => job['state'] == 'queued' || job['state'] == 'running')
+        .firstOrNull;
+    if (active?['id'] is String) activeInstallJob = active!['id'] as String;
+  }
+
+  Future<bool> cancelInstall() async {
+    final id = activeInstallJob;
+    if (id == null) return false;
+    try {
+      final value = await _json('/managed/cancel',
+          body: {'job_id': id}, timeout: const Duration(seconds: 8));
+      return value['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> deleteModel(String id) async {
+    await _json('/managed/delete', body: {'model': id});
+  }
+
+  Future<void> resetRuntime() async {
+    await _json('/managed/runtime/reset', body: const {});
   }
 
   Future<Map<String, dynamic>> _json(String path,
@@ -454,7 +562,7 @@ class NodeClient {
       throw const FormatException('Invalid node response');
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw StateError(
+      throw NodeHttpException(response.statusCode,
           _errorMessage(value['error'] ?? 'HTTP ${response.statusCode}'));
     }
     return value;

@@ -1,5 +1,5 @@
 """
-PrivateLM-LAN laptop node.
+localhost.ai-LAN laptop node.
 
 Runs on your laptop and exposes an OpenAI-compatible chat API backed by
 whatever inference engine is already installed locally (Ollama or
@@ -11,13 +11,13 @@ Endpoints:
   GET  /v1/models              -> OpenAI-style model list (proxied)
   POST /v1/chat/completions    -> OpenAI-style chat, streaming + non-streaming
 
-Backends (env PRIVATELM_BACKEND, default: auto):
+Backends (env LOCALHOSTAI_BACKEND, default: auto):
   ollama    -> proxy to http://127.0.0.1:11434/v1
   llamacpp  -> proxy to http://127.0.0.1:8080/v1  (llama-server)
   auto      -> probe Ollama first, then llama-server
 
 Discovery:
-  Listens for UDP broadcast "PRIVATELM_DISCOVER" on port 50897 and replies
+  Listens for UDP broadcast "LOCALHOSTAI_DISCOVER" on port 50897 and replies
   with a one-line JSON descriptor (name, port, backend, models).
 """
 
@@ -38,16 +38,16 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 DISCOVERY_PORT = 50897
-DISCOVERY_MAGIC = "PRIVATELM_DISCOVER"
+DISCOVERY_MAGIC = "LOCALHOSTAI_DISCOVER"
 RPC_PORT = 50052          # llama.cpp rpc-server default
 LLAMA_SERVER_PORT = 8081  # distributed llama-server (Ollama owns 11434)
 
-NODE_NAME = os.environ.get("PRIVATELM_NODE_NAME", socket.gethostname())
-OLLAMA_URL = os.environ.get("PRIVATELM_OLLAMA_URL", "http://127.0.0.1:11434/v1").rstrip("/")
-LLAMACPP_URL = os.environ.get("PRIVATELM_LLAMACPP_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-PORT = int(os.environ.get("PRIVATELM_PORT", "8765"))
+NODE_NAME = os.environ.get("LOCALHOSTAI_NODE_NAME", socket.gethostname())
+OLLAMA_URL = os.environ.get("LOCALHOSTAI_OLLAMA_URL", "http://127.0.0.1:11434/v1").rstrip("/")
+LLAMACPP_URL = os.environ.get("LOCALHOSTAI_LLAMACPP_URL", "http://127.0.0.1:8080/v1").rstrip("/")
+PORT = int(os.environ.get("LOCALHOSTAI_PORT", "8765"))
 
-app = FastAPI(title="PrivateLM-LAN node")
+app = FastAPI(title="localhost.ai-LAN node")
 # Browser-based clients (Flutter web) need CORS to call the node.
 app.add_middleware(
     CORSMiddleware,
@@ -62,9 +62,9 @@ _refresh_task = None
 _cluster_lock = asyncio.Lock()
 
 # Optional: serve the Flutter web build at /app/ (off by default).
-# Enable with PRIVATELM_SERVE_WEB=1 if you want the browser client.
+# Enable with LOCALHOSTAI_SERVE_WEB=1 if you want the browser client.
 _WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web-build")
-if os.environ.get("PRIVATELM_SERVE_WEB") == "1" and os.path.isdir(_WEB_DIR):
+if os.environ.get("LOCALHOSTAI_SERVE_WEB") == "1" and os.path.isdir(_WEB_DIR):
     app.mount("/app", StaticFiles(directory=_WEB_DIR, html=True), name="app")
     print(f"[node] serving web app at /app/ from {_WEB_DIR}")
 
@@ -79,7 +79,7 @@ async def _probe(url: str) -> bool:
 
 
 async def _pick_backend() -> tuple[str, str]:
-    requested = os.environ.get("PRIVATELM_BACKEND", "auto")
+    requested = os.environ.get("LOCALHOSTAI_BACKEND", "auto")
     if requested not in ("auto", "ollama", "llamacpp"):
         raise RuntimeError(f"unknown backend '{requested}'")
     if requested != "auto":
@@ -247,7 +247,7 @@ def _discovery_responder() -> None:
 # ── Distributed inference (llama.cpp RPC) ─────────────────────────────
 # Phones (or other machines) run `rpc-server`; this node launches
 # llama-server with --rpc <peers> so model layers + KV cache are split
-# across every device's memory. Borrowed from PrivateLM's philosophy:
+# across every device's memory. Borrowed from localhost.ai's philosophy:
 # check RAM before loading, scale threads to the device tier.
 
 _cluster = {"proc": None, "peers": [], "model": None}
@@ -290,7 +290,7 @@ async def _scan_rpc_peers() -> list[str]:
 
 def _llama_server_bin() -> str:
     return os.environ.get(
-        "PRIVATELM_LLAMA_SERVER",
+        "LOCALHOSTAI_LLAMA_SERVER",
         os.path.expanduser("~/tools/llama.cpp/build/bin/llama-server"))
 
 
@@ -344,7 +344,7 @@ async def cluster_start(request: Request) -> dict:
         raise HTTPException(400, "invalid JSON") from e
     if not isinstance(body, dict):
         raise HTTPException(400, "request must be a JSON object")
-    model = body.get("model") or os.environ.get("PRIVATELM_CLUSTER_MODEL")
+    model = body.get("model") or os.environ.get("LOCALHOSTAI_CLUSTER_MODEL")
     if not model or not os.path.isfile(model):
         raise HTTPException(400, f"model file not found: {model}")
     if not os.path.exists(_llama_server_bin()):
@@ -369,7 +369,7 @@ async def cluster_start(request: Request) -> dict:
     cmd = _cluster_command(model, peers, ctx, threads, extra)
     async with _cluster_lock:
         await _stop_cluster_process()
-        with open("/tmp/privatelm-cluster.log", "w") as log:
+        with open("/tmp/localhostai-cluster.log", "w") as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
         _cluster.update(proc=proc, peers=peers, model=model)
 
@@ -382,7 +382,7 @@ async def cluster_start(request: Request) -> dict:
             async with _cluster_lock:
                 if _cluster["proc"] is proc:
                     await _stop_cluster_process()
-            raise HTTPException(500, "llama-server exited — see /tmp/privatelm-cluster.log")
+            raise HTTPException(500, "llama-server exited — see /tmp/localhostai-cluster.log")
         try:
             r = await client.get(f"http://127.0.0.1:{LLAMA_SERVER_PORT}/health", timeout=1.0)
             if r.status_code == 200 and _cluster["proc"] is proc and proc.poll() is None:

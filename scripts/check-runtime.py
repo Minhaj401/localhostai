@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the compiled CLI against an isolated local mock node.
 
-Usage: python3 scripts/check-runtime.py [--binary target/debug/privateml]
+Usage: python3 scripts/check-runtime.py [--binary target/debug/localhostai]
 Optional: --llama-server PATH --rpc-server PATH checks native RPC device flags.
 All child processes and temporary configuration belong to this check.
 """
@@ -167,7 +167,7 @@ def managed_tui_check(binary, home):
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-    env = {**os.environ, "PRIVATELM_HOME": str(Path(home).resolve()), "TERM": "xterm-256color"}
+    env = {**os.environ, "LOCALHOSTAI_HOME": str(Path(home).resolve()), "TERM": "xterm-256color"}
     process = subprocess.Popen([str(binary), "--no-lan", "--port", "18766"], stdin=slave,
                                stdout=slave, stderr=slave, env=env, preexec_fn=controlling_terminal)
     os.close(slave)
@@ -222,7 +222,7 @@ def first_run_catalog_check(binary, home):
 
     process = subprocess.Popen([str(binary), "--no-lan", "--port", "18767"], stdin=slave,
                                stdout=slave, stderr=slave,
-                               env={**os.environ, "PRIVATELM_HOME": home, "TERM": "xterm-256color"},
+                               env={**os.environ, "LOCALHOSTAI_HOME": home, "TERM": "xterm-256color"},
                                preexec_fn=controlling_terminal)
     os.close(slave)
     output = bytearray()
@@ -312,15 +312,15 @@ def rpc_check(llama_server, rpc_server):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", default="target/debug/privateml")
+    parser.add_argument("--binary", default="target/debug/localhostai")
     parser.add_argument("--llama-server")
     parser.add_argument("--rpc-server")
     parser.add_argument("--managed-home", help="existing isolated home containing an installed catalog model")
     options = parser.parse_args()
     binary = Path(options.binary).resolve()
     assert binary.is_file(), "build the CLI with cargo build --workspace first"
-    with tempfile.TemporaryDirectory(prefix="privateml-check-", dir=os.environ.get("PRIVATELM_TEST_TMPDIR")) as temp:
-        env = {**os.environ, "PRIVATELM_HOME": temp, "PRIVATELM_TOKEN": "MixedCaseToken"}
+    with tempfile.TemporaryDirectory(prefix="localhostai-check-", dir=os.environ.get("LOCALHOSTAI_TEST_TMPDIR")) as temp:
+        env = {**os.environ, "LOCALHOSTAI_HOME": temp, "LOCALHOSTAI_TOKEN": "MixedCaseToken"}
         invalid = run(binary, ["--port", "not-a-port"], env)
         assert invalid.returncode != 0 and not (Path(temp) / "config.toml").exists()
         print("PASS invalid arguments fail before creating node state")

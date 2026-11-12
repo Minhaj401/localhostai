@@ -178,7 +178,7 @@ def check_placement(result):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", default="target/debug/privateml")
+    parser.add_argument("--binary", default="target/debug/localhostai")
     parser.add_argument("--model", required=True)
     parser.add_argument("--llama-server", required=True)
     parser.add_argument("--rpc-server", required=True)
@@ -188,7 +188,7 @@ def main():
     llama = str(Path(options.llama_server).resolve())
     rpc = str(Path(options.rpc_server).resolve())
     model = str(Path(options.model).resolve())
-    with tempfile.TemporaryDirectory(prefix="privateml-inference-", dir=options.temp_dir) as temp, contextlib.ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="localhostai-inference-", dir=options.temp_dir) as temp, contextlib.ExitStack() as stack:
         home = Path(temp)
         (home / "config.toml").write_text('engine = "managed"\nrequire_pairing = true\ndiscovery = false\n')
         (home / "pair_token").write_text("integration-token")
@@ -201,7 +201,7 @@ def main():
         pid_file = home / "llama.pid"
         wrapper.write_text(f"#!/usr/bin/env python3\nimport os, sys\nfrom pathlib import Path\nPath({str(pid_file)!r}).write_text(str(os.getpid()))\nos.execv({llama!r}, [{llama!r}, '-lv', '5', *sys.argv[1:]])\n")
         wrapper.chmod(0o700)
-        env = {**os.environ, "PRIVATELM_HOME": temp, "PRIVATELM_LLAMA_SERVER": str(wrapper), "PRIVATELM_RPC_SERVER": rpc}
+        env = {**os.environ, "LOCALHOSTAI_HOME": temp, "LOCALHOSTAI_LLAMA_SERVER": str(wrapper), "LOCALHOSTAI_RPC_SERVER": rpc}
         base = f"http://127.0.0.1:{port()}"
         node_log = stack.enter_context((home / "node.log").open("w"))
         node = spawn([binary, "--headless", "--no-lan", "--port", base.rsplit(":", 1)[1]], node_log, env)
@@ -229,8 +229,12 @@ def main():
         # Coordinator-first planning only spills when the local budget is full.
         # Disable self and give each stand-in less than one model but enough in
         # aggregate, ensuring this check still exercises two RPC workers.
-        runtime_hint = (Path(model).stat().st_size + 1024 * 1024 - 1) // (1024 * 1024) + 256
-        worker_budget = 256 + (runtime_hint * 3 + 4) // 5
+        layer_hint = sum(registered.get("layer_weights_mb", []))
+        if not layer_hint:
+            layer_hint = (Path(model).stat().st_size + 1024 * 1024 - 1) // (1024 * 1024)
+        layer_hint += (registered["kv_bytes_per_token"] * load["ctx"] + 1024 * 1024 - 1) // (1024 * 1024)
+        worker_budget = 256 + (layer_hint * 3 + 4) // 5
+        runtime_hint = layer_hint + registered.get("coordinator_mb", 0)
         worker_available = 900 + worker_budget
         workers = []
         for i in range(2):
@@ -310,6 +314,7 @@ def main():
         assert recovered["ok"]
         reply(base)
         print("PASS recovery using the remaining worker", flush=True)
+        require(base, "/peers/toggle", {"id": self_id, "enabled": True})
         # Terminating the node must release the loaded model without an explicit
         # /cluster/stop request, as when shutting down an SSH session or service.
         child_pid = int(pid_file.read_text())

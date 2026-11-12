@@ -1,4 +1,4 @@
-package com.privatelm.privatelm_lan
+package ai.localhost.localhostai
 
 import android.content.Context
 import android.net.ConnectivityManager
@@ -6,6 +6,10 @@ import android.net.NetworkCapabilities
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.BatteryManager
+import android.os.PowerManager
+import android.content.Intent
+import android.content.IntentFilter
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -17,7 +21,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "privatelm/native")
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "localhostai/native")
         workerStopCallback = { channel.invokeMethod("stopSharing", null) }
         WorkerKeepAliveService.onStop = workerStopCallback
         channel.setMethodCallHandler { call, result ->
@@ -26,6 +30,22 @@ class MainActivity : FlutterActivity() {
                     "nativeLibDir" -> result.success(applicationInfo.nativeLibraryDir)
                     "cacheDir" -> result.success(cacheDir.absolutePath)
                     "workerLogDir" -> result.success(filesDir.absolutePath)
+                    "powerState" -> {
+                        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                        val status = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                        val charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                        val powered = charging || (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+                        val thermal = if (Build.VERSION.SDK_INT >= 29) {
+                            (getSystemService(Context.POWER_SERVICE) as PowerManager).currentThermalStatus
+                        } else PowerManager.THERMAL_STATUS_NONE
+                        result.success(mapOf(
+                            "battery_percent" to if (level >= 0) level * 100 / scale.coerceAtLeast(1) else -1,
+                            "powered" to powered,
+                            "thermal_status" to thermal
+                        ))
+                    }
                     "startWorkerProtection" -> {
                         WorkerKeepAliveService.start(this) { error ->
                             if (error == null) {
@@ -54,6 +74,19 @@ class MainActivity : FlutterActivity() {
                         } catch (e: Exception) {
                             result.success(null)
                         }
+                    }
+                    "lanNetwork" -> {
+                        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                        val value = manager.allNetworks.asSequence().mapNotNull { network ->
+                            val capabilities = manager.getNetworkCapabilities(network)
+                            if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true ||
+                                (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true &&
+                                 capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) != true)) return@mapNotNull null
+                            manager.getLinkProperties(network)?.linkAddresses?.firstOrNull {
+                                it.address is Inet4Address && !it.address.isLoopbackAddress
+                            }
+                        }.firstOrNull()
+                        result.success(value?.let { mapOf("address" to it.address.hostAddress, "prefix" to it.prefixLength) })
                     }
                     else -> result.notImplemented()
                 }

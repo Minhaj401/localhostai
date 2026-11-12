@@ -1,6 +1,6 @@
-# PrivateLM Project Guide
+# localhost.ai Project Guide
 
-This document describes the current PrivateLM implementation in detail. It is
+This document describes the current localhost.ai implementation in detail. It is
 intended for users, contributors, and maintainers who need to understand what
 the project does, how its processes communicate, where data is stored, how
 models are installed, and how laptop and phone resources are combined.
@@ -38,7 +38,7 @@ flow.
 
 ## Purpose
 
-PrivateLM runs a private language model on devices controlled by the user. The
+localhost.ai runs a private language model on devices controlled by the user. The
 laptop is the coordinator. It provides:
 
 - An interactive terminal chat UI.
@@ -55,7 +55,7 @@ The Android app provides:
 - A view of the compute pool and split plan.
 - An optional ARM64 llama.cpp RPC worker that contributes phone RAM and CPU.
 
-Ollama is not required. The default path is fully managed by PrivateLM: the TUI
+Ollama is not required. The default path is fully managed by localhost.ai: the TUI
 downloads a pinned llama.cpp runtime, downloads a selected GGUF model, verifies
 both, starts the processes, and routes chat through them.
 
@@ -119,7 +119,7 @@ chat UI all belong to the same process.
 | `core/src/api.rs` | Node client used by the TUI, including SSE parsing. |
 | `core/src/discovery.rs` | UDP discovery responder and probe implementation. |
 | `core/src/qr.rs` | Pairing URI and terminal QR generation. |
-| `tui/` | The `privateml` terminal executable. |
+| `tui/` | The `localhostai` terminal executable. |
 | `tui/src/main.rs` | CLI startup, TUI event loop, snapshots, and async actions. |
 | `tui/src/app.rs` | TUI state and keyboard action mapping. |
 | `tui/src/ui.rs` | Ratatui rendering for chat, models, devices, and pairing. |
@@ -135,16 +135,16 @@ chat UI all belong to the same process.
 
 ## Laptop process model
 
-Running `privateml` without `--connect` performs the following startup work:
+Running `localhostai` without `--connect` performs the following startup work:
 
 1. Parse CLI arguments before creating runtime state.
-2. Load or create `~/.privateml/config.toml`.
+2. Load or create `~/.localhostai/config.toml`.
 3. Create the model, binary, and log directories.
 4. Load or atomically create the pairing token.
 5. Bind the node to the preferred port or the next free port.
 6. Start the HTTP accept loop as a Tokio task.
 7. Start the UDP discovery responder when enabled.
-8. Scan `~/.privateml/models/` for installed GGUF files.
+8. Scan `~/.localhostai/models/` for installed GGUF files.
 9. Probe the configured inference engine.
 10. Start the interactive terminal UI.
 
@@ -172,7 +172,7 @@ sequenceDiagram
     participant M as Managed installer
     participant C as Cluster manager
 
-    U->>T: Start privateml
+    U->>T: Start localhostai
     T->>N: GET /health, /models, /managed
     N-->>T: No active model + catalog
     T-->>U: Open model picker
@@ -201,7 +201,7 @@ runtime downloads are:
 - macOS ARM64
 
 The archive URL, byte count, and SHA-256 checksum are compiled into the Rust
-binary. The archive is downloaded under `~/.privateml/bin/`, checked, extracted
+binary. The archive is downloaded under `~/.localhostai/bin/`, checked, extracted
 to a staging directory, validated for both required executables, then renamed
 into place.
 
@@ -210,8 +210,8 @@ The two required executables are:
 - `llama-server`
 - `ggml-rpc-server`
 
-Custom binaries can be selected with both `PRIVATELM_LLAMA_SERVER` and
-`PRIVATELM_RPC_SERVER`.
+Custom binaries can be selected with both `LOCALHOSTAI_LLAMA_SERVER` and
+`LOCALHOSTAI_RPC_SERVER`.
 
 ### Model download behavior
 
@@ -235,7 +235,7 @@ process. Successful checks are cached with file size and modification time;
 a changed file is checked again. A same-sized corrupt file is repaired by
 selecting the model in the TUI rather than being passed to llama-server.
 
-If PrivateLM is closed during a download, the `.part` file is retained. The
+If localhost.ai is closed during a download, the `.part` file is retained. The
 next selection of the same model continues from the saved byte offset.
 
 ## Model catalog and storage
@@ -250,7 +250,7 @@ The built-in catalog currently contains:
 | `qwen2.5-7b-instruct-q3_k_m` | Qwen 2.5 7B Instruct | 3,808,391,072 bytes | 28 | Apache-2.0 | General 7B option; Q3 reduces download and RAM pressure. |
 | `qwen2.5-coder-7b-instruct-q4_k_m` | Qwen 2.5 Coder 7B Instruct | 4,683,073,536 bytes | 28 | Apache-2.0 | Higher-quality coding model for a larger pool. |
 
-Models are stored in `~/.privateml/models/`. They are downloaded only once.
+Models are stored in `~/.localhostai/models/`. They are downloaded only once.
 Each later application start reloads the selected model into RAM but does not
 download it again.
 
@@ -261,7 +261,7 @@ official single-file Coder Q4_K_M build. Both files are pinned to immutable
 Hugging Face revisions. The planner still decides at load time whether current
 free RAM can hold them; catalog presence is not a promise that a device fits.
 
-PrivateLM also recognizes user-supplied `.gguf` files in the model directory.
+localhost.ai also recognizes user-supplied `.gguf` files in the model directory.
 It reads their GGUF v2/v3 architecture, transformer block count, and attention
 dimensions. Tokenizer arrays and tensor weights are skipped during inspection.
 Malformed or truncated metadata is rejected before engine startup. A caller's
@@ -477,7 +477,7 @@ phone inference is not implemented in this build.
 The laptop encodes the following URI into a terminal QR:
 
 ```text
-privateml://pair?h=<host>&p=<port>&t=<token>&n=<node-name>
+localhostai://pair?h=<host>&p=<port>&t=<token>&n=<node-name>
 ```
 
 The payload carries everything required to connect:
@@ -503,20 +503,21 @@ overwriting each other.
 The discovery protocol is:
 
 ```text
-Phone -> UDP 255.255.255.255:50897: PRIVATELM_DISCOVER
+Phone -> UDP 255.255.255.255:50897: LOCALHOSTAI_DISCOVER
 Node  -> unicast UDP response: JSON advert
 ```
 
 The advert contains node name, HTTP port, active backend, model names, pairing
 requirement, and protocol version.
 
-Because many access points block broadcast traffic, the Android app also probes
-every host in its IPv4 `/24` subnet on TCP port 8765 and checks `/health`.
+Because many access points block broadcast traffic, the Android app also reads
+the active Wi-Fi/Ethernet IPv4 prefix, scans at most a `/22` on TCP 8765, then
+tries 8766–8774 for a `/24`-sized neighborhood when necessary.
 Discovery results are deduplicated by address and port. Manual node entry
 remains available.
 
-If the node selected a non-default HTTP port, UDP discovery reports the actual
-port. The subnet fallback currently probes the default port only.
+If the node selected another port, UDP discovery reports it exactly. QR/manual
+pairing remain the reliable fallback for wider networks and arbitrary ports.
 
 ## Resource sharing and statistics
 
@@ -546,7 +547,7 @@ Each device reports:
 
 ### Shared-memory budget
 
-PrivateLM reserves memory for the OS and foreground applications:
+localhost.ai reserves memory for the OS and foreground applications:
 
 | Device kind | Reserve |
 |---|---:|
@@ -612,7 +613,7 @@ GGUF is loaded through its first shard, requires a complete, matching shard set,
 and contributes the sum of all shard file sizes to weight-memory estimates.
 Other shards are not registered as independent models.
 
-llama.cpp RPC places model layers on devices. PrivateLM plans at layer
+llama.cpp RPC places model layers on devices. localhost.ai plans at layer
 granularity.
 
 ### Runtime memory estimate
@@ -733,7 +734,7 @@ forcibly killed with SIGKILL. An interrupted `--once` or `--status` command
 returns a nonzero exit code rather than claiming a completed result.
 
 llama-server has up to 180 seconds to become healthy. Logs are written to
-`~/.privateml/logs/cluster-<pid>-<run>.log`. Each run has its own file so a second
+`~/.localhostai/logs/cluster-<pid>-<run>.log`. Each run has its own file so a second
 node instance or a retry does not overwrite the evidence of an earlier failure.
 
 ## Chat request flow
@@ -780,8 +781,9 @@ lives in memory for the life of the TUI process.
 
 ## Embedded node API
 
-The Rust node uses raw Tokio TCP rather than a web framework. It supports CORS
-for browser-compatible clients and speaks JSON plus SSE.
+The Rust node uses raw Tokio TCP rather than a web framework and speaks JSON
+plus SSE. It is a native-client API: browser `Origin` requests are rejected,
+and CORS headers are not emitted.
 
 ### Endpoint summary
 
@@ -795,6 +797,10 @@ for browser-compatible clients and speaks JSON plus SSE.
 | GET | `/managed` | Starter catalog, custom library, runtime state, and install progress. |
 | POST | `/managed/install` | Install, resume, or verify a starter/custom model and runtime. |
 | POST | `/managed/download` | Download and register a selected Hugging Face or URL source. |
+| GET | `/managed/jobs[/<id>]` | List or inspect bounded installation jobs. |
+| POST | `/managed/cancel` | Cancel an installation while retaining valid partial data. |
+| POST | `/managed/delete` | Delete a stopped managed model. |
+| POST | `/managed/runtime/reset` | Remove the stopped managed runtime for a clean reinstall. |
 | POST | `/models/browse` | Search repositories, list GGUF variants, or inspect a file link. |
 | GET | `/models` | GGUF files registered for planning. |
 | POST | `/models` | Register a local GGUF path and optional metadata. |
@@ -805,7 +811,7 @@ for browser-compatible clients and speaks JSON plus SSE.
 | POST | `/cluster/plan` | Produce a split plan. |
 | POST | `/cluster/start` | Plan and start a registered GGUF. |
 | POST | `/cluster/stop` | Stop the active cluster. |
-| OPTIONS | any path | CORS preflight. |
+| OPTIONS | any path | Native-client capability response; browser origins are rejected. |
 
 ### Health
 
@@ -818,7 +824,7 @@ Example response:
   "backend": "distributed",
   "models": ["qwen2.5-3b-instruct-q4_k_m"],
   "pairing": true,
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
 ```
 
@@ -843,14 +849,16 @@ Content-Type: application/json
 - `downloading_model`
 - `ready`
 - `failed`
+- `cancelled`
 
 `POST /managed/install`, `/managed/download`, and `/models/browse` always
 require `Authorization: Bearer <pair_token>`, including when general chat is
 configured without mandatory pairing. The embedded TUI supplies its local token
 automatically.
 
-The TUI polls this endpoint to render byte and percentage progress while the
-install request runs in another task.
+TUI and Android clients create asynchronous jobs and poll `/managed/jobs/<id>`.
+At most one job installs while two wait in the bounded queue. Cancellation and
+the two-hour whole-job deadline retain verified partial data for a later retry.
 
 ### User-selected model downloads
 
@@ -892,7 +900,10 @@ verified, and split GGUFs are grouped into one choice. Other URLs resume only
 with an expected checksum or an HTTP validator (`If-Range`); unversioned sources
 restart instead of combining bytes from potentially different files. Every
 completed custom file receives a stored SHA-256 for validation on future loads.
-Arbitrary direct links do not follow redirects. Custom selections are capped at
+Every outbound hop is DNS-resolved, pinned, and rejected when it targets a
+loopback, private, link-local, documentation, benchmark, or metadata address.
+Redirects are revalidated and HTTPS cannot downgrade to HTTP. Intentional LAN
+model hosts require an explicit `allowed_model_hosts` config entry. Custom selections are capped at
 128 GiB and 1,024 files; installation also requires the remaining download size
 plus 512 MiB of free disk headroom. Model browse/download controls require the
 pair token even when general chat pairing is disabled.
@@ -982,7 +993,9 @@ The raw server currently enforces:
 - Header/body read timeout: 15 seconds.
 - `Content-Length` request bodies only.
 - Chunked request transfer encoding is rejected.
-- CORS origin, headers, and GET/POST/OPTIONS methods are allowed broadly.
+- At most 64 accepted connections and 16 MiB of aggregate request buffering.
+- At most two active/queued inference requests; excess requests receive 429.
+- Response writes have a ten-second client deadline.
 
 These limits apply to API requests, not model downloads. Downloads are made by
 the node's outbound HTTP client.
@@ -991,11 +1004,11 @@ the node's outbound HTTP client.
 
 ### Runtime directory
 
-The default home is `~/.privateml`. Set `PRIVATELM_HOME` to isolate a test or
+The default home is `~/.localhostai`. Set `LOCALHOSTAI_HOME` to isolate a test or
 use another location.
 
 ```text
-~/.privateml/
+~/.localhostai/
   config.toml
   pair_token
   models/
@@ -1025,7 +1038,8 @@ lan_enabled = true
 discovery = true
 engine = "managed"
 ctx = 4096
-require_pairing = false
+require_pairing = true
+allowed_model_hosts = []
 ```
 
 | Setting | Meaning |
@@ -1035,6 +1049,7 @@ require_pairing = false
 | `lan_enabled` | Bind all interfaces when true, loopback only when false. |
 | `discovery` | Enable UDP discovery responses. |
 | `engine` | `managed`, `auto`, `ollama`, or `llamacpp`. |
+| `allowed_model_hosts` | Explicit hostname/IP or `host:port` exceptions for trusted LAN GGUF sources. |
 | `ollama_url` | Optional OpenAI-compatible Ollama base URL. |
 | `llamacpp_url` | Optional external llama-server base URL. |
 | `default_model` | Model used when a request omits one. |
@@ -1049,12 +1064,12 @@ ignored.
 
 | Variable | Purpose |
 |---|---|
-| `PRIVATELM_HOME` | Override `~/.privateml`. |
-| `PRIVATELM_NODE_NAME` | Override the default hostname-based node name. |
-| `PRIVATELM_TOKEN` | Token used by `--connect` clients. |
-| `PRIVATELM_LLAMA_SERVER` | Explicit llama-server binary path. |
-| `PRIVATELM_RPC_SERVER` | Explicit ggml-rpc-server binary path. |
-| `PRIVATELM_DEBUG` | Print best-effort discovery errors. |
+| `LOCALHOSTAI_HOME` | Override `~/.localhostai`. |
+| `LOCALHOSTAI_NODE_NAME` | Override the default hostname-based node name. |
+| `LOCALHOSTAI_TOKEN` | Token used by `--connect` clients. |
+| `LOCALHOSTAI_LLAMA_SERVER` | Explicit llama-server binary path. |
+| `LOCALHOSTAI_RPC_SERVER` | Explicit ggml-rpc-server binary path. |
+| `LOCALHOSTAI_DEBUG` | Print best-effort discovery errors. |
 
 Both explicit toolchain variables must point to executable files.
 
@@ -1110,7 +1125,7 @@ case-insensitively according to HTTP conventions.
 ### Network security boundary
 
 The LAN API currently uses HTTP, not TLS. The bearer token protects application
-authorization but is not encrypted in transit. Use PrivateLM on a trusted LAN
+authorization but is not encrypted in transit. Use localhost.ai on a trusted LAN
 and enable pairing for multi-user networks.
 
 ### Resource consent
@@ -1132,13 +1147,13 @@ cargo build --release
 Result:
 
 ```text
-target/release/privateml
+target/release/localhostai
 ```
 
 ### Run interactively
 
 ```bash
-./target/release/privateml --require-pairing
+./target/release/localhostai --require-pairing
 ```
 
 The first-run picker performs runtime/model setup inside the TUI.
@@ -1146,14 +1161,14 @@ The first-run picker performs runtime/model setup inside the TUI.
 ### CLI modes
 
 ```bash
-./target/release/privateml --status
-./target/release/privateml --headless
-./target/release/privateml --port 9000
-./target/release/privateml --name studio
-./target/release/privateml --no-lan
-./target/release/privateml --no-discovery
-./target/release/privateml --require-pairing
-./target/release/privateml --connect http://192.168.1.20:8765
+./target/release/localhostai --status
+./target/release/localhostai --headless
+./target/release/localhostai --port 9000
+./target/release/localhostai --name studio
+./target/release/localhostai --no-lan
+./target/release/localhostai --no-discovery
+./target/release/localhostai --require-pairing
+./target/release/localhostai --connect http://192.168.1.20:8765
 ```
 
 `--status`, `--headless`, and `--once` are mutually exclusive.
@@ -1164,7 +1179,7 @@ most useful against an already active backend or with `--connect` to a running
 node:
 
 ```bash
-PRIVATELM_TOKEN=<token> ./target/release/privateml \
+LOCALHOSTAI_TOKEN=<token> ./target/release/localhostai \
   --connect http://192.168.1.20:8765 --once "hello"
 ```
 
@@ -1270,12 +1285,12 @@ the Rust product.
 ### `none - no model`
 
 No inference endpoint is active. Press `Up`, choose an installed or catalog
-model, and press Enter. PrivateLM installs missing components and starts the
+model, and press Enter. localhost.ai installs missing components and starts the
 model.
 
 ### Download interrupted or connection reset
 
-PrivateLM keeps the `.part` file, retries transient failures automatically up
+localhost.ai keeps the `.part` file, retries transient failures automatically up
 to eight times, and requests the remaining byte range. If the process was
 closed, restart it, select the same model, and press Enter. Do not delete the
 `.part` file unless intentionally restarting the download from zero.
@@ -1313,7 +1328,7 @@ The returned plan lists placed layers and memory shortfall. Options are:
 Inspect:
 
 ```text
-~/.privateml/logs/cluster-<pid>-<run>.log
+~/.localhostai/logs/cluster-<pid>-<run>.log
 ```
 
 Common causes are an incompatible RPC worker, a missing/corrupt GGUF, port
@@ -1367,12 +1382,12 @@ automation.
 - The Android worker is ARM64-only.
 - The foreground sharing service reduces suspension/background kills, but
   Android memory pressure, user force-stop, or network loss can still end a run.
-- Device include/exclude choices are session state and reset when the laptop
-  node restarts.
+- Device include/exclude choices persist in `~/.localhostai/devices.json`.
 - Reported active allocation is the planner's estimate, not live process RSS.
 - GGUF block counts are read from the file, but memory placement remains an
   estimate. Attention formats without derivable KV sizes use a fallback estimate.
-- The subnet discovery fallback assumes an IPv4 `/24` and TCP port 8765.
+- Android subnet fallback reads the active LAN prefix, caps scans at `/22`, and
+  checks ports 8765–8774 when bounded fallback is needed. UDP/QR remain preferred.
 - The LAN API is HTTP without TLS.
 - The Rust TUI does not persist chat history yet.
 - Standalone on-device phone inference is a stub; the bundled worker only hosts
@@ -1381,7 +1396,8 @@ automation.
   not raw Transformers/safetensors weights. Split downloads are discovered as
   complete groups through Hugging Face. Other HTTP(S) file hosts must report
   their file size through Content-Length or Content-Range.
-- Model deletion and runtime update controls are not exposed in the TUI.
+- Runtime replacement reinstalls the same pinned revision; selecting a newer
+  llama.cpp revision remains an explicit release/build operation.
 - The web project cannot perform UDP discovery or contribute a native worker.
 - The Python node and Termux script are legacy references, not production
   dependencies.
@@ -1404,3 +1420,6 @@ Maintainers should preserve these properties:
     allocation in every user-facing statistic.
 11. Do not probe the single-client RPC socket of a worker already owned by a run.
 12. Require a terminal stream event before treating a reply as completed.
+13. Require the pair token for `/pair` and every control endpoint, including loopback.
+14. Validate and pin every outbound model/runtime destination and redirect hop.
+15. Count swap/zram and pressure as diagnostics only, never as model capacity.

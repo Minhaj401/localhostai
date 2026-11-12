@@ -1,10 +1,10 @@
-//! PrivateLM core — everything the laptop needs to be a node, embedded.
+//! localhost.ai core — everything the laptop needs to be a node, embedded.
 //!
 //! No Python, no separate service, no install step. The TUI binary links this
 //! crate and the node *is* the TUI process.
 //!
 //! Modules:
-//!   config     — `~/.privateml/config.toml`, directories, port selection
+//!   config     — `~/.localhostai/config.toml`, directories, port selection
 //!   discovery  — UDP broadcast responder + client so the APK finds the node
 //!   cluster    — managed llama.cpp and RPC process supervision
 //!   server     — HTTP: /health, /v1/models, /v1/chat/completions (SSE), /pair
@@ -21,6 +21,7 @@ pub mod gguf;
 pub mod hardware;
 pub mod managed;
 pub mod model_hub;
+pub mod network;
 pub mod plan;
 pub mod qr;
 pub mod rpc;
@@ -35,9 +36,9 @@ pub use plan::{ModelInfo, SplitPlan};
 pub use server::{NodeHandle, NodeRuntime, ServerStatus};
 
 /// Product identity, single source of truth.
-pub const APP_NAME: &str = "privateml";
-pub const APP_DISPLAY_NAME: &str = "PrivateLM";
-pub const DISCOVERY_MAGIC: &str = "PRIVATELM_DISCOVER";
+pub const APP_NAME: &str = "localhostai";
+pub const APP_DISPLAY_NAME: &str = "localhost.ai";
+pub const DISCOVERY_MAGIC: &str = "LOCALHOSTAI_DISCOVER";
 pub const DISCOVERY_PORT: u16 = 50897;
 pub const DEFAULT_PORT: u16 = 8765;
 pub const RPC_PORT: u16 = 50052;

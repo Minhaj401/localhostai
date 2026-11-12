@@ -150,7 +150,7 @@ class _ModelsPageState extends ConsumerState<ModelsPage> {
           const TerminalWindow(
               title: 'model catalog',
               child: Text(
-                  '>_ privateml\n\nChoose a model on the laptop,\nthen pair this phone with Ctrl+P.')),
+                  '>_ localhostai\n\nChoose a model on the laptop,\nthen pair this phone with Ctrl+P.')),
           const SizedBox(height: 24),
           PrimaryButton(
               label: 'Connect a laptop',
@@ -289,6 +289,34 @@ class _ModelsPageState extends ConsumerState<ModelsPage> {
                     !node.connected || node.operationBusy || node.installing
                         ? null
                         : () => node.install(model)),
+          ],
+          if (model.installed && node.runningModel != model.id) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              icon: const Icon(LucideIcons.trash2, size: 18),
+              label: const Text('Delete model'),
+              onPressed: node.operationBusy
+                  ? null
+                  : () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Delete this model?'),
+                          content: Text(
+                              '${model.name} will be removed from the laptop. Interrupted download data is removed too.'),
+                          actions: [
+                            TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Keep model')),
+                            FilledButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                child: const Text('Delete')),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) await node.deleteModel(model);
+                    },
+            ),
           ],
           if (model.license.isNotEmpty) ...[
             const SizedBox(height: 12),

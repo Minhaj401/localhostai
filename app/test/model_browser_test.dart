@@ -7,10 +7,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
-import 'package:privatelm_lan/features/connection/connection_controller.dart';
-import 'package:privatelm_lan/features/models/model_browser_page.dart';
-import 'package:privatelm_lan/features/models/models_page.dart';
-import 'package:privatelm_lan/theme/theme.dart';
+import 'package:localhostai/features/connection/connection_controller.dart';
+import 'package:localhostai/features/models/model_browser_page.dart';
+import 'package:localhostai/features/models/models_page.dart';
+import 'package:localhostai/theme/theme.dart';
 
 import 'app_fixture.dart';
 

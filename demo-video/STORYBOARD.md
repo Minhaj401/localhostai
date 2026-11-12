@@ -114,9 +114,9 @@ the laptop terminal shape for the demo half.
 - duration: 7.5s
 - poster: 3.75s
 - src: compositions/s09-terminal.html
-- scene: Recreated PrivateLM terminal with the actual privateml command, Ctrl+P, and a clearly marked demo QR.
+- scene: Recreated localhost.ai terminal with the actual localhostai command, Ctrl+P, and a clearly marked demo QR.
 - voiceover: Let’s try the workflow. Start the laptop app, then press Control P to show the pairing code.
-- reads: privateml --require-pairing (0–3.5s); Ctrl+P opens pairing (3.5–7.5s).
+- reads: localhostai --require-pairing (0–3.5s); Ctrl+P opens pairing (3.5–7.5s).
 - sound: English narration only.
 The displayed QR is a non-pairable storyboard placeholder. No private host token is used.
 

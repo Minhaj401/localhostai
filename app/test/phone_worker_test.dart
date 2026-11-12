@@ -6,10 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:privatelm_lan/models/device_profile.dart';
-import 'package:privatelm_lan/models/pairing.dart';
-import 'package:privatelm_lan/services/node_client.dart';
-import 'package:privatelm_lan/services/phone_worker_service.dart';
+import 'package:localhostai/models/device_profile.dart';
+import 'package:localhostai/models/pairing.dart';
+import 'package:localhostai/services/node_client.dart';
+import 'package:localhostai/services/phone_worker_service.dart';
 
 class FakeProcess implements Process {
   FakeProcess({this.stderrText = ''});
@@ -45,7 +45,7 @@ class LateOutputProcess extends FakeProcess {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  const channel = MethodChannel('privatelm/native');
+  const channel = MethodChannel('localhostai/native');
   setUp(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(

@@ -1,16 +1,16 @@
 [package]
-name = "privateml"
-description = "PrivateLM — your laptop and phone, one private LLM"
+name = "localhostai"
+description = "localhost.ai — your laptop and phone, one private LLM"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "privateml"
+name = "localhostai"
 path = "src/main.rs"
 
 [dependencies]
-privateml-core = { path = "../core" }
+localhostai-core = { path = "../core" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio.workspace = true

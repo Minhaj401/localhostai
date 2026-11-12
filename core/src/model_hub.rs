@@ -135,14 +135,21 @@ pub struct HubResults {
 }
 
 pub struct ModelHub {
-    client: Client,
+    policy: crate::network::NetworkPolicy,
     base: Url,
 }
 
 impl ModelHub {
-    pub fn new(client: Client) -> Self {
+    pub fn new(_client: Client) -> Self {
         Self {
-            client,
+            policy: crate::network::NetworkPolicy::default(),
+            base: Url::parse("https://huggingface.co/").unwrap(),
+        }
+    }
+
+    pub fn with_policy(policy: crate::network::NetworkPolicy) -> Self {
+        Self {
+            policy,
             base: Url::parse("https://huggingface.co/").unwrap(),
         }
     }
@@ -378,9 +385,14 @@ impl ModelHub {
     }
 
     async fn json(&self, url: Url) -> Result<Value> {
-        let response = authenticated(self.client.get(url))
-            .timeout(Duration::from_secs(30))
-            .send()
+        let response = self
+            .policy
+            .send(
+                reqwest::Method::GET,
+                &url,
+                header::HeaderMap::new(),
+                Duration::from_secs(30),
+            )
             .await?;
         check_status(&response)?;
         let mut stream = response.bytes_stream();
@@ -396,24 +408,33 @@ impl ModelHub {
     }
 
     async fn url_metadata(&self, url: Url) -> Result<(u64, Option<String>)> {
-        let client = direct_client()?;
-        let response = client
-            .head(url.clone())
-            .timeout(Duration::from_secs(30))
-            .send()
+        let response = self
+            .policy
+            .send(
+                reqwest::Method::HEAD,
+                &url,
+                header::HeaderMap::new(),
+                Duration::from_secs(30),
+            )
             .await?;
         if response.status().is_success() {
-            if let Some(bytes) = response.content_length().filter(|bytes| *bytes > 0) {
+            if let Some(bytes) = response
+                .headers()
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|bytes| *bytes > 0)
+            {
                 return Ok((bytes, http_validator(response.headers())));
             }
         }
         // Some file hosts do not implement HEAD. Drop the range response after
         // reading its headers; no model is buffered during browsing.
-        let response = client
-            .get(url)
-            .header(header::RANGE, "bytes=0-0")
-            .timeout(Duration::from_secs(30))
-            .send()
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::RANGE, header::HeaderValue::from_static("bytes=0-0"));
+        let response = self
+            .policy
+            .send(reqwest::Method::GET, &url, headers, Duration::from_secs(30))
             .await?;
         check_status(&response)?;
         let bytes = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
@@ -433,34 +454,6 @@ impl ModelHub {
             http_validator(response.headers()),
         ))
     }
-}
-
-pub(crate) fn authenticated(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    // reqwest drops Authorization when following a cross-host redirect. HF's
-    // signed CDN links need no token; credentials never go to arbitrary hosts.
-    let is_hf = request
-        .try_clone()
-        .and_then(|r| r.build().ok())
-        .is_some_and(|r| is_hugging_face(r.url()));
-    if is_hf {
-        if let Ok(token) = std::env::var("HF_TOKEN") {
-            if !token.trim().is_empty() {
-                return request.bearer_auth(token.trim());
-            }
-        }
-    }
-    request
-}
-
-pub(crate) fn direct_client() -> Result<Client> {
-    Ok(Client::builder()
-        .user_agent(concat!("PrivateLM/", env!("CARGO_PKG_VERSION")))
-        // Arbitrary direct links must not turn an apparently public host into a
-        // request to a private service through an attacker-controlled redirect.
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(7200))
-        .build()?)
 }
 
 fn check_status(response: &reqwest::Response) -> Result<()> {
@@ -627,28 +620,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arbitrary_direct_links_do_not_follow_redirects() {
+    async fn explicit_lan_host_does_not_allow_redirects_to_other_endpoints() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let target_url = format!("http://{}/secret.gguf", target.local_addr().unwrap());
         let redirect = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = redirect.local_addr().unwrap().to_string();
         let redirect_url = format!("http://{}/model.gguf", redirect.local_addr().unwrap());
         let redirect_task = tokio::spawn(async move {
-            for _ in 0..2 {
+            for _ in 0..1 {
                 let (mut socket, _) = redirect.accept().await.unwrap();
                 let mut request = [0; 2048];
                 let _ = socket.read(&mut request).await.unwrap();
                 socket.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\n\r\n").as_bytes()).await.unwrap();
             }
         });
-        let error = ModelHub::new(Client::new())
+        let error = ModelHub::with_policy(crate::network::NetworkPolicy::new(vec![endpoint]))
             .resolve(&ModelSource::Url {
                 url: redirect_url,
                 sha256: None,
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("HTTP 302"));
+        assert!(error.to_string().contains("non-public"));
         assert!(
             tokio::time::timeout(Duration::from_millis(50), target.accept())
                 .await

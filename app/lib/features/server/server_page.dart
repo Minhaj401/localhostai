@@ -115,7 +115,7 @@ class ServerPage extends ConsumerWidget {
                               const SizedBox(height: 12),
                               CommandPill(
                                   command: node.endpoint.isEmpty
-                                      ? 'privateml --require-pairing'
+                                      ? 'localhostai --require-pairing'
                                       : node.endpoint,
                                   label: node.endpoint.isEmpty
                                       ? 'Copy laptop command'
@@ -137,14 +137,18 @@ class ServerPage extends ConsumerWidget {
                                         ? null
                                         : () => _pair(context, ref))
                               else if (running ||
-                                  node.clusterState == 'starting')
+                                  node.clusterState == 'starting' ||
+                                  node.installing)
                                 SecondaryButton(
-                                    label: node.clusterState == 'starting'
-                                        ? 'Cancel loading'
-                                        : 'Stop model',
+                                    label: node.installing
+                                        ? 'Cancel download'
+                                        : node.clusterState == 'starting'
+                                            ? 'Cancel loading'
+                                            : 'Stop model',
                                     icon: LucideIcons.square,
-                                    onPressed:
-                                        node.installing ? null : node.stopModel)
+                                    onPressed: node.installing
+                                        ? node.cancelOperation
+                                        : node.stopModel)
                               else if (externalReady)
                                 PrimaryButton(
                                     label: 'Open chat',
@@ -187,6 +191,14 @@ class ServerPage extends ConsumerWidget {
                                       icon:
                                           const Icon(LucideIcons.cpu, size: 16),
                                       label: const Text('Compute pool')),
+                                if (node.client != null && !running)
+                                  TextButton.icon(
+                                      onPressed: node.operationBusy
+                                          ? null
+                                          : node.reinstallRuntime,
+                                      icon: const Icon(LucideIcons.refreshCcw,
+                                          size: 16),
+                                      label: const Text('Reset runtime')),
                               ]),
                             ],
                           )),

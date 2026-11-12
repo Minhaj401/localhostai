@@ -1,4 +1,4 @@
-package com.privatelm.privatelm_lan
+package ai.localhost.localhostai
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -139,7 +139,7 @@ class WorkerKeepAliveService : Service() {
     companion object {
         private const val CHANNEL = "localhost_compute"
         private const val NOTIFICATION_ID = 50052
-        private const val ACTION_STOP = "com.privatelm.STOP_SHARING"
+        private const val ACTION_STOP = "com.localhostai.STOP_SHARING"
         private var instance: WorkerKeepAliveService? = null
         private val starts = mutableListOf<(Throwable?) -> Unit>()
         private val stops = mutableListOf<() -> Unit>()

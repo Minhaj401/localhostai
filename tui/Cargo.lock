@@ -925,7 +925,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "privatelm-tui"
+name = "localhostai-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",

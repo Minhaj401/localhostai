@@ -1,4 +1,4 @@
-//! Ratatui drawing for the PrivateLM-LAN chat client.
+//! Ratatui drawing for the localhost.ai-LAN chat client.
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -352,7 +352,7 @@ pub fn model_picker(f: &mut Frame, app: &App, area: Rect) {
         ))));
     }
     items.push(ListItem::new(Line::from(Span::styled(
-        "  ↑/↓ model · ←/→ context · Enter load · D reload · I install only · B browse · Esc close",
+        "  ↑/↓ model · ←/→ context · Enter load · I install only · B browse · Delete model · U reset runtime",
         Style::default().fg(Color::DarkGray),
     ))));
 
@@ -560,6 +560,12 @@ pub fn devices_panel(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(status, Style::default().fg(colour)),
         ]));
+        if d.is_self && (d.swap_used_mb > 0 || d.pressure_full_avg10.unwrap_or(0.0) > 0.0) {
+            lines.push(Line::from(Span::styled(
+                format!("       paging: {:.1} GiB swap in use · full memory pressure avg10 {:.2}% (not counted as model capacity)", d.swap_used_mb as f64 / 1024.0, d.pressure_full_avg10.unwrap_or(0.0)),
+                Style::default().fg(if d.pressure_full_avg10.unwrap_or(0.0) >= 1.0 { Color::Yellow } else { Color::DarkGray }),
+            )));
+        }
         lines.push(Line::from(vec![
             Span::raw("       "),
             Span::styled(
@@ -634,7 +640,7 @@ pub fn pairing_panel(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::styled(
-        " Scan in the PrivateLM app → Add node → Scan QR.",
+        " Scan in the localhost.ai app → Add node → Scan QR.",
         Style::default().fg(Color::Cyan),
     )));
 
@@ -780,7 +786,7 @@ pub fn help_panel(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  ↑/↓ model · ←/→ context · Enter load · D reload"),
-        Line::from("  I install/verify without loading · B browse more models"),
+        Line::from("  I install/verify · B browse · Delete model · U reset runtime"),
         Line::from("  Browser: search, owner/repo, or GGUF link · Tab edit · Enter choose"),
         Line::from(""),
         Line::from(Span::styled(
@@ -794,7 +800,7 @@ pub fn help_panel(f: &mut Frame, area: Rect) {
     let popup = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" PrivateLM help · F1 · Esc to close ")
+            .title(" localhost.ai help · F1 · Esc to close ")
             .style(Style::default().bg(Color::Black)),
     );
     f.render_widget(ratatui::widgets::Clear, area);
@@ -930,11 +936,11 @@ mod tests {
         app.models = vec!["model".into()];
         app.selected_model = Some(0);
         app.context_tokens = 8192;
-        app.preview = Some(privateml_core::SplitPlan {
+        app.preview = Some(localhostai_core::SplitPlan {
             model: "model".into(),
             total_layers: 28,
             ctx: 8192,
-            assignments: vec![privateml_core::plan::SplitAssignment {
+            assignments: vec![localhostai_core::plan::SplitAssignment {
                 worker_session: None,
                 device_id: "laptop".into(),
                 device_name: "Laptop".into(),

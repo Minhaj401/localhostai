@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 import 'llm_backend.dart';
 import '../models/chat_message.dart';
 
-/// Talks to a PrivateLM-LAN node discovered on the local network
+/// Talks to a localhost.ai-LAN node discovered on the local network
 /// (or entered manually). The heavy inference runs on the laptop's
 /// CPU/GPU; the phone only relays the stream.
 class LaptopNodeBackend extends LlmBackend {
@@ -62,7 +62,7 @@ class LaptopNodeBackend extends LlmBackend {
     final h = await health();
     if (h == null) {
       throw StateError(
-          'Cannot reach the laptop. Run privateml on it, then pair from the home screen.');
+          'Cannot reach the laptop. Run localhostai on it, then pair from the home screen.');
     }
     if (h['ok'] != true) {
       throw StateError('The laptop is connected but has no model loaded. '

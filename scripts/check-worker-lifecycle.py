@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import socket
 
 
 def alive(pid):
@@ -30,7 +31,7 @@ def main():
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
-int privateml_rpc_main(int argc, char ** argv) {
+int localhostai_rpc_main(int argc, char ** argv) {
     if (argc > 1 && std::strcmp(argv[1], "pipe") == 0) {
         int fds[2];
         if (pipe(fds) != 0) return 2;
@@ -49,6 +50,33 @@ int privateml_rpc_main(int argc, char ** argv) {
                         str(root / "phone-rpc/worker-lifecycle.cpp"), str(stub), "-o", str(binary)], check=True)
         subprocess.run([str(binary), "pipe"], check=True)
         print("PASS disconnected clients do not kill the worker with SIGPIPE", flush=True)
+
+        # The shipped wrapper exposes only the paired coordinator address and
+        # keeps the upstream RPC listener on loopback.
+        def free_port():
+            with socket.socket() as reservation:
+                reservation.bind(("127.0.0.1", 0))
+                return reservation.getsockname()[1]
+        external, internal = free_port(), free_port()
+        gated = subprocess.Popen([str(binary), "--host", "0.0.0.0", "--port", str(external),
+                                  "--allow-peer", "192.0.2.10", "--upstream-port", str(internal)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            assert gated.stdout.readline().strip() == "ready"
+            deadline = time.monotonic() + 3
+            while True:
+                try:
+                    with socket.create_connection(("127.0.0.1", external), timeout=.2) as client:
+                        client.sendall(b"rejected")
+                    break
+                except OSError:
+                    assert time.monotonic() < deadline
+                    time.sleep(.05)
+            assert gated.poll() is None
+            print("PASS authenticated gate rejects a non-coordinator source without killing the worker", flush=True)
+        finally:
+            gated.kill()
+            gated.wait(timeout=5)
 
         # Dart can start a child from a reusable/short-lived runtime thread.
         # Ending that thread must not be mistaken for the app process exiting.

@@ -4,9 +4,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:privatelm_lan/models/device_profile.dart';
-import 'package:privatelm_lan/models/pairing.dart';
-import 'package:privatelm_lan/services/node_client.dart';
+import 'package:localhostai/models/device_profile.dart';
+import 'package:localhostai/models/pairing.dart';
+import 'package:localhostai/services/node_client.dart';
 
 const pair =
     PairPayload(host: 'laptop', port: 8765, token: 't', name: 'laptop');

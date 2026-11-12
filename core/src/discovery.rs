@@ -1,7 +1,7 @@
 //! UDP discovery: the phone broadcasts, the laptop answers.
 //!
 //! Protocol (unchanged from the Python node so existing APK builds keep working):
-//!   client -> "PRIVATELM_DISCOVER"  (UDP broadcast to :50897)
+//!   client -> "LOCALHOSTAI_DISCOVER"  (UDP broadcast to :50897)
 //!   server <- one-line JSON: {"name","port","backend","models":[...],"v":2}
 //!
 //! Broadcast does not survive every AP (client isolation, guest networks), so
@@ -48,7 +48,7 @@ pub fn spawn(
     }
 
     std::thread::Builder::new()
-        .name("privateml-discovery".into())
+        .name("localhostai-discovery".into())
         .spawn(move || {
             let sock = match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) {
                 Ok(s) => s,
@@ -56,7 +56,7 @@ pub fn spawn(
                     // Not fatal: another instance may hold the port, or the box
                     // may not allow broadcast sockets. The phone can still use
                     // a manual IP, so stay quiet unless asked to be noisy.
-                    if std::env::var("PRIVATELM_DEBUG").is_ok() {
+                    if std::env::var("LOCALHOSTAI_DEBUG").is_ok() {
                         eprintln!("[discovery] disabled: {e} (phone can use manual IP)");
                     }
                     return;

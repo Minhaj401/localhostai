@@ -5,7 +5,7 @@ import '../models/chat_message.dart';
 
 /// On-device inference backend.
 ///
-/// PrivateLM runs GGUF models via its custom llama.cpp plugin. This clone
+/// localhost.ai runs GGUF models via its custom llama.cpp plugin. This clone
 /// keeps the same seam: platform-specific implementations are wired in per
 /// target (Android/iOS use llama.cpp; web has no local engine), and this
 /// stub is the fallback that throws a clear message.

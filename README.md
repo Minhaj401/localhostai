@@ -30,7 +30,7 @@
 
 **localhost.ai** combines a Rust terminal application, an embedded LAN coordinator, and a Flutter Android app into one local inference system. Your laptop runs the model; an optional worker inside the phone app can hold and compute the layers that need additional room.
 
-**One laptop executable. One Android APK. Your choice of GGUF models.** No account or separate Ollama installation is required. The laptop executable is named `privateml`.
+**One laptop executable. One Android APK. Your choice of GGUF models.** No account or separate Ollama installation is required. The laptop executable is named `localhostai`.
 
 ## See it in action
 
@@ -97,7 +97,7 @@ Black canvas, a single green accent, readable terminal controls, and an adaptive
 
 1. **Inspect the model.** Read GGUF transformer and attention metadata; count every shard and estimate weights plus context-dependent KV memory.
 2. **Plan against available RAM.** Keep OS and application reserves, fill the laptop first, and place the remaining whole layers on opted-in workers.
-3. **Load the selected placement.** PrivateLM starts its pinned llama.cpp runtime and connects to the phone's bundled RPC worker.
+3. **Load the selected placement.** localhost.ai starts its pinned llama.cpp runtime and connects to the phone's bundled RPC worker.
 4. **Stream the answer.** The model executes across the selected devices; the coordinator returns incremental text to your client.
 
 The benefit is **additional usable memory**. Wi-Fi, device CPUs, and the chosen split determine latency; adding a phone is not a promise of faster generation. Plans use physical RAM, not swap capacity, and remain estimates rather than enforced memory quotas.
@@ -112,19 +112,19 @@ Download the **Linux x86_64 terminal binary** from [Releases](https://github.com
 git clone https://github.com/Minhaj401/localhostai.git
 cd localhostai
 cargo build --release --locked
-./target/release/privateml --require-pairing
+./target/release/localhostai --require-pairing
 ```
 
-Choose a starter model and press **Enter**. PrivateLM installs the pinned runtime, resumes and verifies the GGUF download, checks placement, and starts chat. Use **↑ → B** to browse other models.
+Choose a starter model and press **Enter**. localhost.ai installs the pinned runtime, resumes and verifies the GGUF download, checks placement, and starts chat. Use **↑ → B** to browse other models.
 
 <details>
 <summary><strong>Use the prebuilt Linux binary</strong></summary>
 
 ```bash
-curl -fL -o privateml \
-  https://github.com/Minhaj401/localhostai/releases/latest/download/privateml-linux-x86_64
-chmod +x privateml
-./privateml --require-pairing
+curl -fL -o localhostai \
+  https://github.com/Minhaj401/localhostai/releases/latest/download/localhostai-linux-x86_64
+chmod +x localhostai
+./localhostai --require-pairing
 ```
 
 The prebuilt binary requires glibc 2.39+ and OpenSSL 3, as provided by Ubuntu 24.04 and compatible distributions. Release assets include SHA-256 checksums. For older Linux systems or other supported laptop platforms, build from source.
@@ -152,12 +152,12 @@ The five starter Qwen models provide a convenient first run. **They are not a mo
 | Hugging Face search | Search a model name, open a repository, and choose a GGUF variant. |
 | Exact repository | Enter `owner/repository` to browse its quantizations. |
 | Direct GGUF link | Paste a file URL, including a Hugging Face `blob` or `resolve` link. |
-| Existing local file | Place a GGUF in `~/.privateml/models/` and restart, or register its path with the API. |
+| Existing local file | Place a GGUF in `~/.localhostai/models/` and restart, or register its path with the API. |
 | Private or gated repository | Obtain access on Hugging Face and provide `HF_TOKEN` to the laptop coordinator. |
 
 Hugging Face selections resolve to immutable revisions and use published checksums when available. Complete split GGUFs are grouped into one download. Interrupted downloads stay available for retry; installed custom models survive restarts and are checked before loading.
 
-Downloads are stored on the laptop, under `~/.privateml/models/`. Downloading a model and loading it are separate actions, so you can prepare your library ahead of time.
+Downloads are stored on the laptop, under `~/.localhostai/models/`. Downloading a model and loading it are separate actions, so you can prepare your library ahead of time.
 
 ## Engineering beneath the interface
 
@@ -177,7 +177,7 @@ The coordinator avoids probing a worker's single-client RPC socket during an act
 
 ```text
 core/           Embedded Rust coordinator, model installer, planner, and API
-tui/            privateml terminal application
+tui/            localhostai terminal application
 app/            Flutter Android app and bundled native worker
 phone-rpc/      Native worker lifecycle wrapper and build configuration
 scripts/        Runtime, inference, and worker verification tools
@@ -195,7 +195,7 @@ Point compatible clients at `http://<laptop>:8765/v1`. With pairing enabled, use
 
 ```bash
 curl http://localhost:8765/v1/chat/completions \
-  -H "Authorization: Bearer $PRIVATELM_TOKEN" \
+  -H "Authorization: Bearer $LOCALHOSTAI_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "qwen2.5-1.5b-instruct-q4_k_m",
@@ -209,13 +209,13 @@ curl http://localhost:8765/v1/chat/completions \
 
 | Command | Purpose |
 | --- | --- |
-| `privateml` | Start the embedded node and interactive terminal. |
-| `privateml --require-pairing` | Require the pairing token for LAN chat and controls. |
-| `privateml --headless` | Run the coordinator without the TUI. |
-| `privateml --status` | Inspect the node and active backend. |
-| `privateml --connect http://HOST:PORT` | Attach to an existing coordinator. |
-| `privateml --connect http://HOST:PORT --once "Hello"` | Stream one reply from a loaded model. |
-| `privateml --no-lan` | Restrict the node to loopback. |
+| `localhostai` | Start the embedded node and interactive terminal. |
+| `localhostai --require-pairing` | Require the pairing token for LAN chat and controls. |
+| `localhostai --headless` | Run the coordinator without the TUI. |
+| `localhostai --status` | Inspect the node and active backend. |
+| `localhostai --connect http://HOST:PORT` | Attach to an existing coordinator. |
+| `localhostai --connect http://HOST:PORT --once "Hello"` | Stream one reply from a loaded model. |
+| `localhostai --no-lan` | Restrict the node to loopback. |
 
 **Enter** send · **↑** models · **B** browse inside the picker · **←/→** context · **I** install only · **Ctrl+D** devices · **Ctrl+P** pair · **Ctrl+A** activity · **Ctrl+X** stop · **F1** help
 
@@ -238,7 +238,7 @@ The current distributed path uses CPU workers. Memory pressure, a force-stop, or
 
 ## Verification you can reproduce
 
-The current local verification pass covers **114 Rust tests** and **66 Flutter tests**, strict static checks, release builds, real CPU/RPC verification from the project's reliability pass, and custom-download interruption/resume/restart checks. Native RPC integration uses loopback workers as phone stand-ins; it is separate from physical Android testing.
+The current local verification pass covers **125 Rust tests** and **71 Flutter tests**, strict static checks, release builds, cold runtime installation through GitHub redirects, real CPU/RPC verification, and custom-download interruption/resume/restart checks. Native RPC integration uses loopback workers as phone stand-ins; it is separate from physical Android testing.
 
 ```bash
 # From the repository root

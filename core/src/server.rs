@@ -22,13 +22,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, OwnedSemaphorePermit, Semaphore};
 
 use crate::cluster::{Cluster, ClusterStatus};
 use crate::config::Config;
 use crate::discovery::Advert;
 use crate::hardware::Hardware;
-use crate::managed::Managed;
+use crate::managed::{InstallTask, Managed};
 use crate::plan::{self, ModelInfo, SplitPlan};
 use crate::rpc::{WorkerReport, WorkerStatus};
 
@@ -81,9 +81,24 @@ struct Inner {
     self_enabled: AtomicBool,
     cluster: Cluster,
     peers: tokio::sync::Mutex<Vec<Peer>>,
+    device_enabled: tokio::sync::Mutex<std::collections::HashMap<String, bool>>,
+    device_state_path: std::path::PathBuf,
     // Model inventory (GGUF files we can place across the cluster).
     models: tokio::sync::Mutex<Vec<ModelInfo>>,
     managed: Managed,
+    body_budget: Arc<Semaphore>,
+    inference_slots: Arc<Semaphore>,
+    engine_probe_failures: std::sync::atomic::AtomicU64,
+    live_hardware: bool,
+}
+
+const MAX_BUFFERED_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CONNECTIONS: usize = 64;
+
+struct Request {
+    head: String,
+    body: Vec<u8>,
+    _budget: Option<OwnedSemaphorePermit>,
 }
 
 impl NodeHandle {
@@ -168,12 +183,25 @@ impl NodeHandle {
 
         if self.inner.self_enabled.load(Ordering::Relaxed) {
             let mut hardware = current_self_hardware(&self.inner);
-            credit_released_allocation(&mut hardware, None, None, &active);
+            let releasable = active
+                .server_pid
+                .map(crate::hardware::process_releasable_mb);
+            credit_released_allocation(&mut hardware, None, None, releasable, &active);
             devices.push((hardware, None));
         } else {
+            // llama-server still owns input/output tensors and native buffers
+            // when all transformer blocks are remote. Exclusion controls layer
+            // placement, not the unavoidable coordinator process.
+            let mut hardware = current_self_hardware(&self.inner);
+            let releasable = active
+                .server_pid
+                .map(crate::hardware::process_releasable_mb);
+            credit_released_allocation(&mut hardware, None, None, releasable, &active);
+            hardware.can_host_layers = false;
+            devices.push((hardware, None));
             excluded.push((
                 self.inner.hardware.name.clone(),
-                "excluded from the pool in the TUI".into(),
+                "transformer layers excluded; coordinator overhead remains local".into(),
             ));
         }
 
@@ -185,6 +213,7 @@ impl NodeHandle {
                     &mut p.hw,
                     p.rpc.as_deref(),
                     p.worker.as_ref().map(|report| report.session.as_str()),
+                    p.worker.as_ref().and_then(|report| report.releasable_mb),
                     &active,
                 );
                 if let Some(report) = p.worker {
@@ -233,6 +262,7 @@ impl NodeHandle {
 /// Start the node. Returns immediately; the listener runs on a task.
 pub async fn start(cfg: Config) -> Result<NodeHandle> {
     cfg.validate()?;
+    crate::cluster::prune_logs(&crate::config::logs_dir());
     let pair_token = cfg.pair_token()?;
     let bind_ip = if cfg.lan_enabled {
         "0.0.0.0"
@@ -291,6 +321,8 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
     };
 
     let hardware = Hardware::probe_self(&cfg.node_name);
+    let device_enabled = crate::config::load_device_state();
+    let self_enabled = device_enabled.get(&hardware.id).copied().unwrap_or(true);
     let inner = Arc::new(Inner {
         pair_token,
         status_tx,
@@ -301,11 +333,17 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         shutdown: shutdown_tx.clone(),
         port,
         hardware,
-        self_enabled: AtomicBool::new(true),
+        self_enabled: AtomicBool::new(self_enabled),
         cluster: Cluster::new(),
         peers: tokio::sync::Mutex::new(Vec::new()),
+        device_enabled: tokio::sync::Mutex::new(device_enabled),
+        device_state_path: crate::config::device_state_path(),
         models: tokio::sync::Mutex::new(Vec::new()),
-        managed: Managed::new()?,
+        managed: Managed::with_model_hosts(cfg.allowed_model_hosts.clone())?,
+        body_budget: Arc::new(Semaphore::new(MAX_BUFFERED_REQUEST_BYTES)),
+        inference_slots: Arc::new(Semaphore::new(2)),
+        engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
+        live_hardware: true,
         cfg,
     });
 
@@ -314,6 +352,7 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
     let mut shutdown_rx = shutdown_tx.subscribe();
     tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
+        let admission = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => break,
@@ -321,8 +360,15 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
                 accepted = listener.accept() => {
                     match accepted {
                         Ok((stream, peer)) => {
+                            let Ok(permit) = admission.clone().try_acquire_owned() else {
+                                // Closing immediately bounds descriptors and task allocation,
+                                // including clients that have not sent any HTTP headers.
+                                drop(stream);
+                                continue;
+                            };
                             let conn = acc.clone();
                             connections.spawn(async move {
+                                let _permit = permit;
                                 if let Err(e) = handle_conn(conn, stream, peer).await {
                                     tracing::debug!("conn error: {e}");
                                 }
@@ -373,7 +419,7 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
 
 /// Register every `*.gguf` in the managed models directory.
 ///
-/// A GGUF sitting in `~/.privateml/models/` is one the user already put there,
+/// A GGUF sitting in `~/.localhostai/models/` is one the user already put there,
 /// so requiring a separate registration call would make `GET /models` look
 /// empty and the phone offer nothing splittable. Scanning keeps the advertised
 /// problem to one instruction: drop a file in, restart, plan it.
@@ -495,6 +541,18 @@ async fn refresh_engine(inner: &Inner) {
     {
         return;
     }
+    let owned_stopped = matches!(
+        inner.status_tx.borrow().backend.as_str(),
+        "managed" | "distributed"
+    ) && before.state != crate::cluster::ClusterState::Running;
+    if engine.url.is_none() && inner.status_tx.borrow().upstream.is_some() && !owned_stopped {
+        let failures = inner.engine_probe_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if failures < 3 && before.state == after.state {
+            return;
+        }
+    } else {
+        inner.engine_probe_failures.store(0, Ordering::Relaxed);
+    }
     inner.status_tx.send_modify(|s| {
         s.backend = engine.backend.clone();
         s.models = engine.models.clone();
@@ -530,7 +588,23 @@ fn models_from(v: &Value) -> Vec<String> {
 }
 
 async fn peer_states(inner: &Inner) -> Vec<(Peer, WorkerStatus)> {
-    let peers = inner.peers.lock().await.clone();
+    let active_ids: std::collections::HashSet<_> = inner
+        .cluster
+        .status()
+        .await
+        .assignments
+        .into_iter()
+        .filter(|assignment| assignment.layers > 0)
+        .map(|assignment| assignment.device_id)
+        .collect();
+    let peers = {
+        let mut peers = inner.peers.lock().await;
+        peers.retain(|peer| {
+            peer.last_seen.elapsed() < std::time::Duration::from_secs(24 * 60 * 60)
+                || active_ids.contains(&peer.hw.id)
+        });
+        peers.clone()
+    };
     let mut seen = std::collections::HashSet::new();
     futures::future::join_all(peers.into_iter().map(|p| {
         let unique = p.rpc.as_ref().is_some_and(|rpc| seen.insert(rpc.clone()));
@@ -562,6 +636,13 @@ async fn register_peer(
     rpc: Option<String>,
     worker: Option<WorkerReport>,
 ) -> bool {
+    let persisted_enabled = inner
+        .device_enabled
+        .lock()
+        .await
+        .get(&hw.id)
+        .copied()
+        .unwrap_or(true);
     let mut peers = inner.peers.lock().await;
     let previous = peers.iter().find(|peer| peer.hw.id == hw.id).cloned();
     let mut retired_sessions = previous
@@ -593,7 +674,7 @@ async fn register_peer(
         .iter()
         .find(|peer| peer.hw.id == hw.id || (rpc.is_some() && peer.rpc == rpc))
         .map(|peer| peer.enabled)
-        .unwrap_or(true);
+        .unwrap_or(persisted_enabled);
     for old in peers
         .iter()
         .filter(|peer| peer.hw.id != hw.id && rpc.is_some() && peer.rpc == rpc)
@@ -620,6 +701,7 @@ fn credit_released_allocation(
     hardware: &mut Hardware,
     rpc: Option<&str>,
     session: Option<&str>,
+    releasable_mb: Option<u64>,
     active: &ClusterStatus,
 ) {
     if active.state != crate::cluster::ClusterState::Running {
@@ -635,7 +717,7 @@ fn credit_released_allocation(
         // appear too large because its previous run is still resident.
         let available = hardware
             .available_mb
-            .saturating_add(assignment.memory_mb)
+            .saturating_add(releasable_mb.unwrap_or(0).min(assignment.memory_mb))
             .min(hardware.ram_mb);
         hardware.budget_mb = Hardware::share_budget_mb(&hardware.kind, hardware.ram_mb, available);
         hardware.can_host_layers = hardware.budget_mb > 0;
@@ -644,21 +726,15 @@ fn credit_released_allocation(
 
 fn current_self_hardware(inner: &Inner) -> Hardware {
     let stored = &inner.hardware;
-    let live = Hardware::probe_self(&stored.name);
-    let available = if live.ram_mb.abs_diff(stored.ram_mb) <= 16 {
-        live.available_mb
-    } else {
-        stored.available_mb
-    };
-    Hardware::from_raw_available(
-        &stored.id,
-        &stored.name,
-        &stored.kind,
-        stored.ram_mb,
-        available.min(stored.ram_mb),
-        stored.cores,
-        &stored.arch,
-    )
+    if !inner.live_hardware {
+        return stored.clone();
+    }
+    let mut live = Hardware::probe_self(&stored.name);
+    // Identity is stable; capacity and cgroup constraints are live and may be
+    // tightened after startup by a service/container manager.
+    live.id = stored.id.clone();
+    live.name = stored.name.clone();
+    live
 }
 
 // ---------------------------------------------------------------- connection
@@ -666,11 +742,14 @@ fn current_self_hardware(inner: &Inner) -> Hardware {
 async fn handle_conn(inner: Arc<Inner>, mut stream: TcpStream, peer: SocketAddr) -> Result<()> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        read_request(&mut stream),
+        read_request(&mut stream, Some(&inner)),
     )
     .await
     {
-        Ok(Ok(Some((head, body)))) => dispatch(inner, stream, peer, &head, body).await,
+        Ok(Ok(Some(request))) => {
+            let _budget = request._budget;
+            dispatch(inner, stream, peer, &request.head, request.body).await
+        }
         Ok(Ok(None)) => Ok(()),
         Ok(Err(e)) => {
             respond_cors(
@@ -687,12 +766,13 @@ async fn handle_conn(inner: Arc<Inner>, mut stream: TcpStream, peer: SocketAddr)
     }
 }
 
-async fn read_request(stream: &mut TcpStream) -> Result<Option<(String, Vec<u8>)>> {
+async fn read_request(stream: &mut TcpStream, security: Option<&Inner>) -> Result<Option<Request>> {
     const MAX_HEADERS: usize = 64 * 1024;
     const MAX_BODY: usize = 4 * 1024 * 1024;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut parsed = None;
+    let mut budget = None;
     loop {
         let n = stream.read(&mut chunk).await?;
         if n == 0 {
@@ -708,10 +788,35 @@ async fn read_request(stream: &mut TcpStream) -> Result<Option<(String, Vec<u8>)
                 let head = std::str::from_utf8(&buf[..end])
                     .context("invalid HTTP headers")?
                     .to_string();
+                if let Some(inner) = security {
+                    if let Some((status, message)) = access_error(inner, &head) {
+                        respond_cors(
+                            stream,
+                            status,
+                            "application/json",
+                            json!({"error":{"message":message}}).to_string().as_bytes(),
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+                }
                 let want = content_length(&head)?;
                 if want > MAX_BODY {
                     respond_cors(stream, 413, "text/plain", b"request body exceeds 4 MiB").await?;
                     return Ok(None);
+                }
+                if let Some(inner) = security {
+                    budget = match inner
+                        .body_budget
+                        .clone()
+                        .try_acquire_many_owned((want.max(1) * 3) as u32)
+                    {
+                        Ok(permit) => Some(permit),
+                        Err(_) => {
+                            respond_cors(stream, 503, "application/json", b"{\"error\":{\"message\":\"coordinator request memory budget is busy; retry shortly\"}}").await?;
+                            return Ok(None);
+                        }
+                    };
                 }
                 parsed = Some((head, end + 4, want));
             } else if buf.len() > MAX_HEADERS {
@@ -721,7 +826,11 @@ async fn read_request(stream: &mut TcpStream) -> Result<Option<(String, Vec<u8>)
         }
         if let Some((head, start, want)) = &parsed {
             if buf.len() - start >= *want {
-                return Ok(Some((head.clone(), buf[*start..*start + *want].to_vec())));
+                return Ok(Some(Request {
+                    head: head.clone(),
+                    body: buf[*start..*start + *want].to_vec(),
+                    _budget: budget,
+                }));
             }
         }
     }
@@ -768,6 +877,16 @@ async fn dispatch(
 
     tracing::debug!(%peer, method, %path, "request");
 
+    if let Some((code, message)) = access_error(&inner, head) {
+        return respond_cors(
+            &mut stream,
+            code,
+            "application/json",
+            json!({"error":{"message":message}}).to_string().as_bytes(),
+        )
+        .await;
+    }
+
     // CORS preflight — the phone's WebView and any browser client may send it.
     if method == "OPTIONS" {
         return respond_cors(&mut stream, 204, "application/json", b"").await;
@@ -798,7 +917,7 @@ async fn dispatch(
     if path == "/pair" && method == "GET" {
         // The QR is displayed locally. Publishing its secret to an unpaired
         // LAN caller would bypass pairing entirely.
-        if !peer.ip().is_loopback() && !authorized(&inner, head) {
+        if !authorized(&inner, head) {
             return respond_cors(
                 &mut stream,
                 401,
@@ -882,6 +1001,104 @@ async fn dispatch(
         let body = serde_json::to_vec(&inner.managed.view().await)?;
         return respond_cors(&mut stream, 200, "application/json", &body).await;
     }
+    if path == "/managed/jobs" && method == "GET" {
+        let body = serde_json::to_vec(&json!({"jobs":inner.managed.jobs().await}))?;
+        return respond_cors(&mut stream, 200, "application/json", &body).await;
+    }
+    if let Some(id) = path.strip_prefix("/managed/jobs/") {
+        if method == "GET" {
+            let (code, body) = match inner.managed.job(id).await {
+                Some(job) => (200, json!({"job":job})),
+                None => (
+                    404,
+                    json!({"error":"installation session not found; retry the model to resume its saved partial download"}),
+                ),
+            };
+            return respond_cors(
+                &mut stream,
+                code,
+                "application/json",
+                body.to_string().as_bytes(),
+            )
+            .await;
+        }
+    }
+    if path == "/managed/cancel" && method == "POST" {
+        let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let ok = match body["job_id"].as_str() {
+            Some(id) => inner.managed.cancel(id).await,
+            None => false,
+        };
+        return respond_cors(
+            &mut stream,
+            if ok { 200 } else { 404 },
+            "application/json",
+            json!({"ok":ok}).to_string().as_bytes(),
+        )
+        .await;
+    }
+    if path == "/managed/delete" && method == "POST" {
+        let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let Some(model) = request["model"].as_str() else {
+            return respond_cors(
+                &mut stream,
+                400,
+                "application/json",
+                b"{\"error\":\"model is required\"}",
+            )
+            .await;
+        };
+        if inner.cluster.status().await.model.as_deref() == Some(model) {
+            return respond_cors(
+                &mut stream,
+                409,
+                "application/json",
+                b"{\"error\":\"stop the active model before deleting it\"}",
+            )
+            .await;
+        }
+        let result = inner.managed.remove_model(model).await;
+        if result.is_ok() {
+            inner.models.lock().await.retain(|item| item.name != model);
+        }
+        let (code, value) = match result {
+            Ok(()) => (200, json!({"ok":true})),
+            Err(error) => (400, json!({"error":format!("{error:#}")})),
+        };
+        return respond_cors(
+            &mut stream,
+            code,
+            "application/json",
+            value.to_string().as_bytes(),
+        )
+        .await;
+    }
+    if path == "/managed/runtime/reset" && method == "POST" {
+        if !matches!(
+            inner.cluster.status().await.state,
+            crate::cluster::ClusterState::Stopped | crate::cluster::ClusterState::Failed
+        ) {
+            return respond_cors(
+                &mut stream,
+                409,
+                "application/json",
+                b"{\"error\":\"stop the active model before reinstalling the runtime\"}",
+            )
+            .await;
+        }
+        let result = inner.managed.reset_runtime().await;
+        let (code, value) = match result {
+            Ok(()) => (200, json!({"ok":true})),
+            Err(error) => (500, json!({"error":format!("{error:#}")})),
+        };
+        return respond_cors(
+            &mut stream,
+            code,
+            "application/json",
+            value.to_string().as_bytes(),
+        )
+        .await;
+    }
     if path == "/models/browse" && method == "POST" {
         let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let Some(query) = req["query"].as_str() else {
@@ -921,16 +1138,23 @@ async fn dispatch(
                     .await;
                 }
             };
-        let (code, body) = match inner.managed.download(&source).await {
-            Ok(model) => {
-                NodeHandle {
-                    inner: inner.clone(),
-                }
-                .add_model(model.clone())
-                .await;
-                (200, json!({"ok":true,"model":model}))
-            }
-            Err(error) => (400, json!({"ok":false,"error":format!("{error:#}")})),
+        let asynchronous = req["async"].as_bool().unwrap_or(false);
+        let handle = NodeHandle {
+            inner: inner.clone(),
+        };
+        let job = inner
+            .managed
+            .enqueue(InstallTask::Download(source), move |model| async move {
+                handle.add_model(model).await;
+            })
+            .await;
+        let (code, body) = match job {
+            Ok(job) if asynchronous => (202, json!({"ok":true,"job":job})),
+            Ok(job) => match inner.managed.wait_job(&job.id).await {
+                Ok(model) => (200, json!({"ok":true,"model":model})),
+                Err(error) => (400, json!({"ok":false,"error":format!("{error:#}")})),
+            },
+            Err(error) => (409, json!({"ok":false,"error":format!("{error:#}")})),
         };
         return respond_cors(
             &mut stream,
@@ -982,13 +1206,31 @@ async fn dispatch(
             )
             .await;
         }
-        match inner.managed.install(model).await {
-            Ok(model) => {
-                NodeHandle {
-                    inner: inner.clone(),
-                }
-                .add_model(model.clone())
+        let asynchronous = req["async"].as_bool().unwrap_or(false);
+        let handle = NodeHandle {
+            inner: inner.clone(),
+        };
+        let job = inner
+            .managed
+            .enqueue(InstallTask::Model(model.into()), move |model| async move {
+                handle.add_model(model).await;
+            })
+            .await;
+        let result = match job {
+            Ok(job) if asynchronous => {
+                return respond_cors(
+                    &mut stream,
+                    202,
+                    "application/json",
+                    json!({"ok":true,"job":job}).to_string().as_bytes(),
+                )
                 .await;
+            }
+            Ok(job) => inner.managed.wait_job(&job.id).await,
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(model) => {
                 let body = json!({"ok": true, "model": model});
                 return respond_cors(
                     &mut stream,
@@ -1168,6 +1410,15 @@ async fn dispatch(
             )
             .await;
         }
+        {
+            let mut state = inner.device_enabled.lock().await;
+            state.insert(id.to_string(), enabled);
+            if let Err(error) =
+                crate::config::save_device_state_at(&inner.device_state_path, &state)
+            {
+                tracing::warn!(%error, "could not persist device inclusion state");
+            }
+        }
         let body = json!({"ok": true, "id": id, "enabled": enabled});
         return respond_cors(
             &mut stream,
@@ -1208,6 +1459,7 @@ async fn dispatch(
             "in_use": self_layers > 0,
             "heartbeat_seconds": 0,
             "assigned_layers": self_layers, "assigned_memory_mb": self_memory,
+            "memory": self_hw.memory,
         }))
         .chain(peer_states(&inner).await.into_iter().map(|(p, worker)| {
             let (assigned_layers, assigned_memory) = allocation(&p.hw.id);
@@ -1229,6 +1481,7 @@ async fn dispatch(
                 "usable": p.enabled && worker.compatible && (p.hw.can_host_layers || worker.in_use),
                 "assigned_layers": assigned_layers,
                 "assigned_memory_mb": assigned_memory,
+                "memory": p.hw.memory,
             })
         }))
         .collect();
@@ -1556,6 +1809,38 @@ fn authorized(inner: &Inner, headers: &str) -> bool {
         })
 }
 
+fn access_error(inner: &Inner, head: &str) -> Option<(u16, &'static str)> {
+    // The shipped product is a native client, not a browser-hosted dashboard.
+    // Reject cross-origin browser traffic before consuming a request body.
+    if head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
+    {
+        return Some((
+            403,
+            "browser-origin requests are not supported by this native coordinator",
+        ));
+    }
+    let mut request = head.lines().next().unwrap_or("").split_whitespace();
+    let method = request.next().unwrap_or("");
+    let path = request
+        .next()
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/");
+    let public = method == "OPTIONS"
+        || path == "/health"
+        || path == "/pair/verify"
+        || (!inner.cfg.require_pairing && matches!(path, "/v1/models" | "/v1/chat/completions"));
+    if !public && !authorized(inner, head) {
+        return Some((401, "pair token required"));
+    }
+    None
+}
+
 fn request_context(req: &Value, default: u32) -> Option<u32> {
     match req.get("ctx") {
         None => Some(default),
@@ -1569,6 +1854,9 @@ fn request_context(req: &Value, default: u32) -> Option<u32> {
 // ------------------------------------------------------------------- chat
 
 async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8>) -> Result<()> {
+    let Ok(_slot) = inner.inference_slots.clone().try_acquire_owned() else {
+        return respond_cors(&mut stream, 429, "application/json", b"{\"error\":{\"message\":\"the inference queue is full; retry after the current reply\"}}").await;
+    };
     let req: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
@@ -1596,7 +1884,7 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
     let status = inner.status_tx.borrow().clone();
     let Some(upstream) = status.upstream else {
         let msg = "No model is loaded. Open the TUI model picker with Up, select a model, \
-                   and press Enter; PrivateLM will download and start it.";
+                   and press Enter; localhost.ai will download and start it.";
         let b = json!({ "error": { "message": msg, "type": "server_error" } });
         return respond_cors(
             &mut stream,
@@ -1685,14 +1973,25 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
     }
 
     // SSE passthrough — headers first, then chunks as they arrive.
-    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
-    stream.write_all(head.as_bytes()).await?;
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        stream.write_all(head.as_bytes()),
+    )
+    .await??;
     let mut upstream = resp.bytes_stream();
     use futures::StreamExt;
     while let Some(chunk) = upstream.next().await {
         match chunk {
             Ok(bytes) => {
-                if stream.write_all(&bytes).await.is_err() {
+                if !matches!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        stream.write_all(&bytes)
+                    )
+                    .await,
+                    Ok(Ok(()))
+                ) {
                     break;
                 }
                 let _ = stream.flush().await;
@@ -1724,12 +2023,16 @@ async fn respond_cors(
 ) -> Result<()> {
     let reason = match code {
         200 => "OK",
+        202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         408 => "Request Timeout",
+        409 => "Conflict",
         413 => "Payload Too Large",
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
@@ -1737,13 +2040,17 @@ async fn respond_cors(
         _ => "Unknown",
     };
     let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(head.as_bytes()).await?;
-    stream.write_all(body).await?;
-    let _ = stream.flush().await;
-    let _ = stream.shutdown().await;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        stream.write_all(head.as_bytes()).await?;
+        stream.write_all(body).await?;
+        stream.flush().await?;
+        stream.shutdown().await
+    })
+    .await
+    .context("client response write timed out")??;
     Ok(())
 }
 
@@ -1752,10 +2059,51 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    #[test]
+    fn secret_and_control_routes_require_auth_even_on_loopback_and_browser_origins_are_rejected() {
+        let (status_tx, _) = watch::channel(ServerStatus::default());
+        let (shutdown, _) = broadcast::channel(1);
+        let directory = tempfile::tempdir().unwrap();
+        let inner = Inner {
+            cfg: Config::default(),
+            pair_token: "secret".into(),
+            status_tx,
+            http: reqwest::Client::new(),
+            advert: None,
+            shutdown,
+            port: 8765,
+            hardware: Hardware::default(),
+            self_enabled: AtomicBool::new(true),
+            cluster: Cluster::new(),
+            peers: Default::default(),
+            models: Default::default(),
+            managed: Managed::new().unwrap(),
+            device_enabled: Default::default(),
+            device_state_path: directory.path().join("devices.json"),
+            body_budget: Arc::new(Semaphore::new(MAX_BUFFERED_REQUEST_BYTES)),
+            inference_slots: Arc::new(Semaphore::new(2)),
+            engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
+            live_hardware: false,
+        };
+        assert_eq!(
+            access_error(&inner, "GET /pair HTTP/1.1\r\n\r\n"),
+            Some((401, "pair token required"))
+        );
+        assert_eq!(access_error(&inner, "POST /cluster/stop HTTP/1.1\r\nAuthorization: Bearer secret\r\nOrigin: https://evil.example\r\n\r\n"), Some((403, "browser-origin requests are not supported by this native coordinator")));
+        assert_eq!(
+            access_error(
+                &inner,
+                "GET /pair HTTP/1.1\r\nAuthorization: Bearer secret\r\n\r\n"
+            ),
+            None
+        );
+    }
+
     struct TestNode {
         inner: Arc<Inner>,
         url: String,
         task: tokio::task::JoinHandle<()>,
+        _directory: tempfile::TempDir,
     }
 
     impl TestNode {
@@ -1768,6 +2116,7 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let (status_tx, _) = watch::channel(ServerStatus::default());
             let (shutdown, _) = broadcast::channel(1);
+            let directory = tempfile::tempdir().unwrap();
             let inner = Arc::new(Inner {
                 cfg: Config {
                     require_pairing,
@@ -1783,8 +2132,14 @@ mod tests {
                 self_enabled: AtomicBool::new(true),
                 cluster: Cluster::new(),
                 peers: Default::default(),
+                device_enabled: Default::default(),
+                device_state_path: directory.path().join("devices.json"),
                 models: Default::default(),
                 managed: Managed::new().unwrap(),
+                body_budget: Arc::new(Semaphore::new(MAX_BUFFERED_REQUEST_BYTES)),
+                inference_slots: Arc::new(Semaphore::new(2)),
+                engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
+                live_hardware: false,
             });
             let state = inner.clone();
             let task = tokio::spawn(async move {
@@ -1802,6 +2157,7 @@ mod tests {
                 inner,
                 url: format!("http://127.0.0.1:{port}"),
                 task,
+                _directory: directory,
             }
         }
     }
@@ -1991,7 +2347,8 @@ mod tests {
         let upstream_url = format!("http://{}/v1", upstream.local_addr().unwrap());
         let received = tokio::spawn(async move {
             let (mut stream, _) = upstream.accept().await.unwrap();
-            let (head, body) = read_request(&mut stream).await.unwrap().unwrap();
+            let request = read_request(&mut stream, None).await.unwrap().unwrap();
+            let (head, body) = (request.head, request.body);
             assert!(head.starts_with("POST /v1/chat/completions "));
             let body: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(body["model"], "registered-model");
@@ -2123,6 +2480,7 @@ mod tests {
             size_mb: 2500,
             layers: 10,
             kv_bytes_per_token: 0,
+            ..Default::default()
         };
         let handle = NodeHandle {
             inner: node.inner.clone(),
@@ -2271,7 +2629,7 @@ mod tests {
         let task = tokio::spawn(async move {
             for _ in 0..2 {
                 let (mut stream, _) = listener.accept().await.unwrap();
-                read_request(&mut stream).await.unwrap();
+                read_request(&mut stream, None).await.unwrap();
                 respond_cors(
                     &mut stream,
                     200,
@@ -2539,12 +2897,24 @@ mod tests {
             }],
             ..Default::default()
         };
-        credit_released_allocation(&mut hardware, Some("10.0.0.2:50053"), None, &active);
+        credit_released_allocation(
+            &mut hardware,
+            Some("10.0.0.2:50053"),
+            None,
+            Some(1400),
+            &active,
+        );
         assert_eq!(
             hardware.budget_mb, original,
             "a different worker cannot reclaim the old allocation"
         );
-        credit_released_allocation(&mut hardware, Some("10.0.0.2:50052"), None, &active);
+        credit_released_allocation(
+            &mut hardware,
+            Some("10.0.0.2:50052"),
+            None,
+            Some(1400),
+            &active,
+        );
         assert_eq!(hardware.budget_mb, 1500);
     }
 
@@ -2558,6 +2928,7 @@ mod tests {
             &mut hardware,
             Some("10.0.0.2:50054"),
             Some("new-session"),
+            Some(414),
             &active,
         );
         assert_eq!(hardware.budget_mb, original);

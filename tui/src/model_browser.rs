@@ -1,7 +1,7 @@
 //! Keyboard state for online model discovery, separate from the chat draft.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use privateml_core::model_hub::{HubResults, ModelSource};
+use localhostai_core::model_hub::{HubResults, ModelSource};
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Default)]

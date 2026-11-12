@@ -521,6 +521,12 @@ class _PoolScreenState extends State<PoolScreen> {
                   context,
                   '${(device.assignedMemoryMb / 1024).toStringAsFixed(1)} GB assigned',
                 ),
+              if (device.isSelf && device.swapUsedMb > 0)
+                _compactMetric(context,
+                    '${(device.swapUsedMb / 1024).toStringAsFixed(1)} GB swap used; excluded from capacity'),
+              if (device.isSelf && device.pressureFullAvg10 > 0)
+                _compactMetric(context,
+                    '${device.pressureFullAvg10.toStringAsFixed(2)}% full pressure'),
             ],
           ),
         ],

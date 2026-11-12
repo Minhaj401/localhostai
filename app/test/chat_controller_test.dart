@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get/get.dart';
-import 'package:privatelm_lan/controllers/chat_controller.dart';
-import 'package:privatelm_lan/features/connection/connection_controller.dart';
-import 'package:privatelm_lan/models/pairing.dart';
-import 'package:privatelm_lan/services/phone_worker_service.dart';
-import 'package:privatelm_lan/services/storage_service.dart';
-import 'package:privatelm_lan/ui/settings_screen.dart';
+import 'package:localhostai/controllers/chat_controller.dart';
+import 'package:localhostai/features/connection/connection_controller.dart';
+import 'package:localhostai/models/pairing.dart';
+import 'package:localhostai/services/phone_worker_service.dart';
+import 'package:localhostai/services/storage_service.dart';
+import 'package:localhostai/ui/settings_screen.dart';
 
 import 'app_fixture.dart';
 import 'support.dart';
@@ -71,6 +71,51 @@ void main() {
     await second;
     expect(controller.messages.last.content, 'new reply');
     expect(controller.isGenerating.value, isFalse);
+  });
+
+  test('interrupted streams preserve visible partial assistant text', () async {
+    final backend = FakeBackend(reply: 'partial answer', failAfterReply: true);
+    final storage = MemoryStorage();
+    final controller =
+        Get.put(ChatController(storage, backendFactory: (_) => backend));
+    await controller.send('question');
+    expect(controller.messages.last.content, 'partial answer');
+    expect(controller.messages.last.interrupted, isTrue);
+    expect(storage.history.last['interrupted'], isTrue);
+    expect(controller.error.value, contains('transport interrupted'));
+  });
+
+  test('laptop history is conservatively bounded by selected context',
+      () async {
+    final backend = FakeBackend(id: 'laptop');
+    final storage = MemoryStorage()
+      ..settings['active_backend'] = 'laptop'
+      ..settings['context_tokens'] = '1024'
+      ..history = List.generate(
+          20,
+          (index) => {
+                'role': index.isEven ? 'user' : 'assistant',
+                'content': 'x' * 600
+              });
+    final controller =
+        Get.put(ChatController(storage, backendFactory: (_) => backend));
+    await controller.send('latest');
+    expect(backend.received.last.content, 'latest');
+    expect(
+        backend.received
+            .fold<int>(0, (sum, message) => sum + message.content.length),
+        lessThanOrEqualTo(2304));
+  });
+
+  test('a single message cannot bypass the selected context budget', () async {
+    final storage = MemoryStorage()
+      ..settings['active_backend'] = 'laptop'
+      ..settings['context_tokens'] = '1024';
+    final controller = Get.put(ChatController(storage,
+        backendFactory: (_) => FakeBackend(id: 'laptop')));
+    await controller.send('x' * 2000);
+    expect(controller.messages, isEmpty);
+    expect(controller.error.value, contains('too large'));
   });
 
   test('selecting another node clears the old pairing credentials', () async {
