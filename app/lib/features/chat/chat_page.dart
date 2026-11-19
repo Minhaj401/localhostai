@@ -16,6 +16,7 @@ import '../../widgets/buttons.dart';
 import '../../widgets/common.dart';
 import '../../widgets/terminal_window.dart';
 import '../connection/connection_controller.dart';
+import 'conversations_page.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -31,6 +32,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scroll = ScrollController();
   bool _following = true;
   bool _scrollQueued = false;
+  Worker? _draftWatch;
+  final Map<String, String> _drafts = {};
+  String _draftConversation = '';
 
   @override
   void initState() {
@@ -39,10 +43,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? Get.find<ChatController>()
         : Get.put(ChatController(Get.find<StorageService>()));
     _input.addListener(_inputChanged);
+    _draftConversation = controller.shared.current?.id ?? '';
+    controller.shared.addListener(_conversationChanged);
+    _draftWatch = ever<String?>(controller.retryDraft, (text) {
+      if (text != null && _input.text.isEmpty) _input.text = text;
+      controller.retryDraft.value = null;
+    });
   }
 
   void _inputChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _conversationChanged() {
+    if (!mounted) return;
+    final next = controller.shared.current?.id ?? '';
+    if (next == _draftConversation) return;
+    _drafts[_draftConversation] = _input.text;
+    _input.text = _drafts.remove(next) ?? '';
+    _draftConversation = next;
+    _following = true;
   }
 
   void _follow() {
@@ -68,6 +88,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    _draftWatch?.dispose();
+    controller.shared.removeListener(_conversationChanged);
     _input.removeListener(_inputChanged);
     _input.dispose();
     _focus.dispose();
@@ -76,6 +98,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _newChat() async {
+    if (controller.activeBackendId.value == 'laptop' &&
+        controller.shared.ready) {
+      await controller.clearChat();
+      return;
+    }
     if (controller.messages.isEmpty) return;
     final clear = await showDialog<bool>(
         context: context,
@@ -103,6 +130,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           title: const Brand(compact: true, size: 22, showMark: false),
           actions: [
             IconButton(
+                tooltip: 'Saved conversations',
+                onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => ConversationsPage(chat: controller))),
+                icon: const Icon(LucideIcons.history, size: 20)),
+            IconButton(
                 tooltip: 'New chat',
                 onPressed: _newChat,
                 icon: const Icon(LucideIcons.plus, size: 20)),
@@ -111,6 +144,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           top: false,
           bottom: false,
           child: Column(children: [
+            AnimatedBuilder(
+                animation: controller.shared,
+                builder: (context, _) {
+                  final chat = controller.shared.current;
+                  if (chat == null ||
+                      controller.activeBackendId.value != 'laptop') {
+                    return const SizedBox.shrink();
+                  }
+                  return AdaptiveContent(
+                      maxWidth: 720,
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                      child: Row(children: [
+                        Expanded(
+                            child: Text(chat.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: mono(13, color: C.text))),
+                        const SizedBox(width: 8),
+                        Text(
+                            chat.activeRequest != null
+                                ? 'Generating'
+                                : controller.shared.online
+                                    ? 'Synced'
+                                    : 'Offline',
+                            style: mono(12,
+                                color: controller.shared.online
+                                    ? C.accent
+                                    : C.warn)),
+                      ]));
+                }),
             Obx(() {
               final error = controller.error.value;
               if (error == null) return const SizedBox.shrink();
@@ -149,7 +212,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               final message = controller.messages[index];
                               return RepaintBoundary(
                                   key: ObjectKey(message),
-                                  child: _Message(message: message));
+                                  child: _Message(
+                                      message: message,
+                                      streaming: message.generating));
                             }
                             return RepaintBoundary(child: Obx(() {
                               final text = controller.streamingText.value;
@@ -348,7 +413,7 @@ class _Message extends StatelessWidget {
         const SizedBox(height: 8),
         Text(message.backend!, style: mono(12)),
       ],
-      if (!user && message.interrupted) ...[
+      if (!user && message.interrupted && !streaming) ...[
         const SizedBox(height: 8),
         Text('Interrupted response', style: mono(12, color: C.warn)),
       ],

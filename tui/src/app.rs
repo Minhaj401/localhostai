@@ -109,6 +109,8 @@ pub enum Overlay {
     Pairing,
     Activity,
     Help,
+    Conversations,
+    Performance,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +121,7 @@ pub struct Msg {
 }
 
 pub struct App {
+    pub workspace: crate::workspace::Workspace,
     pub browser: ModelBrowser,
     pub base_url: String,
     pub node_label: String,
@@ -181,6 +184,7 @@ pub struct App {
 impl App {
     pub fn new(base_url: String, system_prompt: String) -> Self {
         Self {
+            workspace: Default::default(),
             browser: ModelBrowser {
                 editing: true,
                 ..Default::default()
@@ -375,6 +379,12 @@ impl App {
     }
 
     pub fn paste(&mut self, text: &str) {
+        if self.overlay == Overlay::Conversations {
+            self.workspace
+                .query
+                .push_str(&text.replace(['\n', '\r'], " "));
+            return;
+        }
         if self.overlay == Overlay::ModelBrowser {
             self.browser.paste(text);
             return;
@@ -389,6 +399,27 @@ impl App {
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.overlay == Overlay::Conversations
+            && key.code != KeyCode::Esc
+            && !(control && key.code == KeyCode::Char('c'))
+        {
+            return Action::Workspace(self.workspace.key(key));
+        }
+        if self.overlay == Overlay::Performance {
+            match key.code {
+                KeyCode::Char('b') => {
+                    return Action::Workspace(crate::workspace::Action::Benchmark)
+                }
+                KeyCode::Char('x') => {
+                    return Action::Workspace(crate::workspace::Action::CancelBenchmark)
+                }
+                KeyCode::PageDown => {
+                    self.workspace.scroll = self.workspace.scroll.saturating_add(8)
+                }
+                KeyCode::PageUp => self.workspace.scroll = self.workspace.scroll.saturating_sub(8),
+                _ => {}
+            }
+        }
         if self.overlay == Overlay::ModelBrowser && !(control && key.code == KeyCode::Char('c')) {
             if key.code == KeyCode::Esc {
                 self.browser.request_id = self.browser.request_id.wrapping_add(1);
@@ -413,13 +444,25 @@ impl App {
             KeyCode::Esc if self.overlay != Overlay::None => self.overlay = Overlay::None,
             KeyCode::Esc => return Action::Quit,
             KeyCode::F(1) => self.overlay = Overlay::Help,
+            KeyCode::Char('o') if control => {
+                self.overlay = Overlay::Conversations;
+                self.workspace.renaming = false;
+                self.workspace.query.clear();
+            }
+            KeyCode::Char('g') if control => {
+                self.overlay = Overlay::Performance;
+                self.workspace.scroll = 0;
+            }
+            KeyCode::Char('n') if control && self.overlay == Overlay::None => {
+                return Action::Workspace(crate::workspace::Action::New)
+            }
             KeyCode::Char('a') if control && self.overlay == Overlay::None => {
                 self.overlay = Overlay::Activity
             }
             KeyCode::Char('x')
                 if control && matches!(self.overlay, Overlay::None | Overlay::Activity) =>
             {
-                if self.busy {
+                if self.busy || self.workspace.generating() {
                     return Action::CancelChat;
                 }
                 if self.setup_busy && self.setup_job.is_some() {
@@ -592,6 +635,9 @@ impl App {
             KeyCode::Enter
                 if self.overlay == Overlay::None
                     && !self.busy
+                    && !self.workspace.generating()
+                    && !self.workspace.pending
+                    && !self.workspace.benchmarking()
                     && !self.cluster_starting
                     && !self.setup_busy
                     && !self.input.trim().is_empty() =>
@@ -618,6 +664,7 @@ impl App {
 
 #[derive(Debug, PartialEq)]
 pub enum Action {
+    Workspace(crate::workspace::Action),
     None,
     Quit,
     Send,

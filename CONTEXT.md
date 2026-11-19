@@ -492,3 +492,22 @@ workers in these tests run on loopback; Android hardware testing is separate.
   b12110 Android worker build, cold runtime redirect/install test, lifecycle
   checks, and real local/two-worker inference with reload, loss/recovery, polling,
   heartbeat, SIGHUP, and SIGKILL cleanup.
+
+## Shared conversations and performance — 0.3.0 / Android +9
+
+- The coordinator owns named conversations under `~/.localhostai/conversations`.
+  TUI and Android clients share revision-checked messages, full-text search,
+  rename/delete, Markdown/JSON export, interruption checkpoints, and explicit
+  phone-history import. Stale clients cannot overwrite newer edits.
+- TUI Ctrl+O/Ctrl+N and Android Chat history expose the shared library. Android
+  uses the system document picker and retains a credential-scoped offline snapshot.
+- `/performance` separates runtime-reported token counts, time to first token,
+  HTTP round-trip latency, measured process RSS, planned memory, and active layer
+  placement. Missing measurements remain unavailable instead of becoming zero.
+- The exclusive laptop/distributed benchmark reloads and warms each mode with the
+  same prompt/settings, forces real remote placement, records measured timings/RSS,
+  preserves device inclusion choices, and stops the model after every outcome.
+- Verification: 130 Rust tests (plus a real-process ignored benchmark), 78 Flutter
+  tests across four scaled viewports, strict Clippy/analysis, HTTP/restart/PTY
+  conversation checks, native CPU/RPC benchmark checks, Linux release, and signed
+  Android ARM64 release build. Physical Android worker validation remains separate.

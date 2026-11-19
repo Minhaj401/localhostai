@@ -1,7 +1,7 @@
 name: localhostai
 description: localhost.ai — Run AI Locally. Private chat and LAN inference.
 publish_to: "none"
-version: 0.2.3+8
+version: 0.3.0+9
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -24,6 +24,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_native_splash: ^2.4.2
   flutter_secure_storage: ^9.2.4
+  path_provider: ^2.1.5
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:

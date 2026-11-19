@@ -45,8 +45,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, {"devices": []})
         elif self.path == "/models":
             self.reply(200, {"models": []})
-        else:
+        elif self.path in ("/cluster", "/managed"):
             self.reply(200, {"state": "stopped"})
+        else:
+            self.reply(404, {"error": "not supported by this legacy mock"})
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))

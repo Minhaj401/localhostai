@@ -40,11 +40,19 @@ terminal and app-private `files/worker-last-failure.json`. The laptop also recei
 these details through `/peers` and appends them to the failed run's log when it
 is reachable. Successful polling does not clear the phone's failure message.
 
-Chat history, pairing, device identity, and backend settings are stored locally.
+Paired-laptop conversations are stored on the coordinator, with the last viewed
+chat cached on the phone. Pairing, device identity, external-provider history,
+and backend settings remain phone-local.
 Cloud backends are available in **Settings**, including before pairing.
 Android backup and device-transfer backup are disabled for this app. Use the
 coordinator and phone worker only on a trusted LAN: their traffic is not
 encrypted.
+
+Version `0.3.0+9` adds **Chat → Saved conversations** for names, search, rename,
+and Markdown/JSON export through the Android document picker. **Server →
+Performance dashboard** shows measured timings, RSS, latency, and layer placement,
+plus a controlled laptop-only/distributed comparison. See the
+[feature guide](../docs/CONVERSATIONS_AND_PERFORMANCE.md).
 
 The UI follows [`DESIGN_FLUTTER.md`](DESIGN_FLUTTER.md): pure black, one green
 accent, hairline dark cards, Outfit UI typography, and JetBrains Mono labels and

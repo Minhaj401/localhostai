@@ -109,7 +109,7 @@ class SettingsScreen extends ConsumerWidget {
                           children: [
                         const Brand(compact: true, size: 20),
                         const SizedBox(height: 12),
-                        Text('0.2.3 / build 8', style: mono(12)),
+                        Text('0.3.0 / build 9', style: mono(12)),
                         if (onReplaySetup != null)
                           TextButton(
                               onPressed: onReplaySetup,

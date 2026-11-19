@@ -191,6 +191,7 @@ class NodeClient {
   int _reportSequence = 0;
   String? lastPeerError;
   String? activeInstallJob;
+  double? _lastReportRttMs;
 
   NodeClient(this.pair,
       {http.Client? client,
@@ -272,6 +273,7 @@ class NodeClient {
   /// laptop will refuse to count this device's memory.
   Future<bool> reportSelf(DeviceProfile profile,
       {String? rpc, Map<String, dynamic>? worker}) async {
+    final started = Stopwatch()..start();
     try {
       final r = await _http
           .post(
@@ -280,11 +282,17 @@ class NodeClient {
             body: jsonEncode({
               ...profile.toJson(rpc: rpc),
               if (worker != null)
-                'worker': {...worker, 'sequence': ++_reportSequence},
+                'worker': {
+                  ...worker,
+                  'sequence': ++_reportSequence,
+                  if (_lastReportRttMs != null)
+                    'coordinator_rtt_ms': _lastReportRttMs
+                },
             }),
           )
           .timeout(const Duration(seconds: 5));
       final value = jsonDecode(r.body) as Map;
+      _lastReportRttMs = started.elapsedMicroseconds / 1000;
       final accepted = r.statusCode == 200 &&
           value['ok'] == true &&
           value['ignored'] != true;
@@ -426,6 +434,14 @@ class NodeClient {
   }
 
   Future<Map<String, dynamic>> managedStatus() => _json('/managed');
+  Future<Map<String, dynamic>> document(String path,
+          {Map<String, dynamic>? body}) =>
+      _json(path, body: body);
+  Future<double> ping() async {
+    final watch = Stopwatch()..start();
+    await _json('/ping', timeout: const Duration(seconds: 3));
+    return watch.elapsedMicroseconds / 1000;
+  }
 
   Future<List<Map<String, dynamic>>> registeredModels() async {
     final value = await _json('/models');

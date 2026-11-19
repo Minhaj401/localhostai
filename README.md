@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/Minhaj401/localhostai/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/checks-Rust%20%2B%20Flutter-5CF26A" alt="Rust and Flutter checks"></a>
-  <a href="https://github.com/Minhaj401/localhostai/releases"><img src="https://img.shields.io/badge/release-v0.2.3-5CF26A" alt="Release v0.2.3"></a>
+  <a href="https://github.com/Minhaj401/localhostai/releases"><img src="https://img.shields.io/badge/release-v0.3.0-5CF26A" alt="Release v0.3.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5CF26A" alt="MIT license"></a>
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/coordinator-Rust-DEA584" alt="Rust coordinator"></a>
   <a href="app"><img src="https://img.shields.io/badge/app-Flutter-54C5F8" alt="Flutter app"></a>
@@ -234,11 +234,28 @@ Model browse, download, and resume endpoints always require the pairing token. S
 
 Use a **trusted LAN**: coordinator HTTP and raw RPC traffic are not encrypted. Model/runtime downloads contact their hosting services; managed prompts remain local. The phone hosts remote layers and still needs the laptop coordinator. GGUF architecture support depends on the pinned runtime; raw safetensors and standalone phone inference are not supported by this workflow.
 
-The current distributed path uses CPU workers. Memory pressure, a force-stop, or network loss can interrupt a run; restore sharing and reload the model to recover. The TUI does not yet persist chat history. See [current limitations](PROJECT_GUIDE.md#current-limitations) for the complete picture.
+The current distributed path uses CPU workers. Memory pressure, a force-stop, or network loss can interrupt a run; restore sharing and reload the model to recover. Shared conversations persist on the coordinator, including interrupted replies. See [current limitations](PROJECT_GUIDE.md#current-limitations) for the complete picture.
+
+## Shared chats and live performance
+
+**TUI:** Ctrl+O opens named conversations, full-text search, rename, and export;
+Ctrl+N starts a new chat. **Android:** use the history icon in Chat to open the
+same library and continue a conversation from your laptop. Markdown/JSON exports
+use local files or Android's document picker. Existing phone-local history can
+be explicitly imported.
+
+**Ctrl+G** in the TUI or **Server → Performance dashboard** on Android shows
+runtime token speed, first-token time, HTTP round-trip latency, measured process
+RSS, and planned layer placement. Run a laptop-only/distributed comparison with
+the same model, prompt, and settings to measure the effect of sharing. It reloads
+each mode and leaves the model stopped afterward.
+
+See the [conversation and performance guide](docs/CONVERSATIONS_AND_PERFORMANCE.md)
+for synchronization, measurement definitions, limits, benchmark behavior, and API routes.
 
 ## Verification you can reproduce
 
-The current local verification pass covers **125 Rust tests** and **71 Flutter tests**, strict static checks, release builds, cold runtime installation through GitHub redirects, real CPU/RPC verification, and custom-download interruption/resume/restart checks. Native RPC integration uses loopback workers as phone stand-ins; it is separate from physical Android testing.
+The current local verification pass covers **130 Rust tests** and **78 Flutter tests**, strict static checks, release builds, shared-conversation integration, cold runtime installation through GitHub redirects, real CPU/RPC benchmark verification, and custom-download interruption/resume/restart checks. Native RPC integration uses loopback workers as phone stand-ins; it is separate from physical Android testing.
 
 ```bash
 # From the repository root

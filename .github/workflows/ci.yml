@@ -33,6 +33,8 @@ jobs:
         run: cargo build --workspace --locked
       - name: CLI and terminal integration
         run: python3 scripts/check-runtime.py
+      - name: Shared conversations and performance integration
+        run: python3 scripts/check-workspace.py
 
   flutter:
     name: Flutter application

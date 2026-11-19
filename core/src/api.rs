@@ -121,9 +121,29 @@ impl Node {
             msgs.push(json!({"role": role, "content": content}));
         }
 
+        self.stream_body(json!({"model":model,"stream":true,"messages":msgs}), tx)
+            .await
+    }
+
+    pub async fn conversation_stream(
+        &self,
+        conversation: &crate::conversations::Conversation,
+        content: &str,
+        tx: mpsc::UnboundedSender<ApiEvent>,
+    ) -> Result<()> {
+        let result = self.stream_body(json!({"conversation_id":conversation.id,"revision":conversation.revision,
+            "request_id":crate::conversations::new_id()?,"content":content,"model":conversation.model,
+            "ctx":conversation.ctx,"system_prompt":conversation.system_prompt,"stream":true}), &tx).await;
+        if let Err(error) = &result {
+            let _ = tx.send(ApiEvent::Failed(format!("{error:#}")));
+        }
+        result
+    }
+
+    async fn stream_body(&self, body: Value, tx: &mpsc::UnboundedSender<ApiEvent>) -> Result<()> {
         let resp = self
             .auth(self.http.post(format!("{}/v1/chat/completions", self.base)))
-            .json(&json!({ "model": model, "stream": true, "messages": msgs }))
+            .json(&body)
             .send()
             .await
             .context("request to node failed")?;

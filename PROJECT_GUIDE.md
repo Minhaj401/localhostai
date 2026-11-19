@@ -824,7 +824,7 @@ Example response:
   "backend": "distributed",
   "models": ["qwen2.5-3b-instruct-q4_k_m"],
   "pairing": true,
-  "version": "0.2.3"
+  "version": "0.3.0"
 }
 ```
 
@@ -1024,10 +1024,16 @@ use another location.
   logs/
     cluster-<pid>-<run>.log
   install.lock
+  conversations/
+    identity
+    <conversation-id>.json
+  exports/
+    chat-<conversation-id>-<timestamp>.md
 ```
 
-`history.db` has a reserved path in the Rust core but terminal history is not
-currently written there.
+`history.db` is an unused reserved path. Shared terminal/phone conversations use
+atomic JSON records under `conversations/`, with revision checks and generation
+leases. See the [feature guide](docs/CONVERSATIONS_AND_PERFORMANCE.md).
 
 ### Default configuration
 
@@ -1383,13 +1389,15 @@ automation.
 - The foreground sharing service reduces suspension/background kills, but
   Android memory pressure, user force-stop, or network loss can still end a run.
 - Device include/exclude choices persist in `~/.localhostai/devices.json`.
-- Reported active allocation is the planner's estimate, not live process RSS.
+- Active allocation remains the planner's estimate. `/performance` separately
+  reports measured engine RSS and aged phone worker RSS samples.
 - GGUF block counts are read from the file, but memory placement remains an
   estimate. Attention formats without derivable KV sizes use a fallback estimate.
 - Android subnet fallback reads the active LAN prefix, caps scans at `/22`, and
   checks ports 8765–8774 when bounded fallback is needed. UDP/QR remain preferred.
 - The LAN API is HTTP without TLS.
-- The Rust TUI does not persist chat history yet.
+- Shared conversations persist on the paired coordinator. Live sync requires
+  the laptop; Android retains its most recently viewed conversation offline.
 - Standalone on-device phone inference is a stub; the bundled worker only hosts
   remote layers.
 - Custom model installation accepts text GGUFs supported by the pinned runtime,
@@ -1403,6 +1411,10 @@ automation.
   dependencies.
 
 ## Important invariants
+
+Named conversations, revision conflicts, exports, live metrics, and the exclusive
+benchmark are documented in
+[`docs/CONVERSATIONS_AND_PERFORMANCE.md`](docs/CONVERSATIONS_AND_PERFORMANCE.md).
 
 Maintainers should preserve these properties:
 

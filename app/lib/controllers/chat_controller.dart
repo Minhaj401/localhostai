@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:math';
 import 'package:get/get.dart';
 
 import '../models/chat_message.dart';
@@ -8,17 +9,23 @@ import '../services/laptop_node_service.dart';
 import '../services/local_inference_stub.dart';
 import '../services/node_discovery.dart';
 import '../services/storage_service.dart';
+import '../services/conversation_library.dart';
 
 /// Builds the active backend from stored settings and owns chat state.
 /// Mirrors localhost.ai's controller layer, with 'laptop' added as a first-class
 /// backend alongside 'cloud' and 'local'.
 class ChatController extends GetxController {
   ChatController(this._storage, {LlmBackend Function(String)? backendFactory})
-      : _backendFactory = backendFactory;
+      : _backendFactory = backendFactory,
+        shared = ConversationLibrary(_storage);
 
   final StorageService _storage;
   final LlmBackend Function(String)? _backendFactory;
   int _generation = 0;
+  final ConversationLibrary shared;
+  String? _sharedId;
+  int _sharedRevision = -1;
+  final retryDraft = RxnString();
 
   final messages = <ChatMessage>[].obs;
   final isGenerating = false.obs;
@@ -38,6 +45,7 @@ class ChatController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    shared.addListener(_sharedChanged);
     final saved = _storage.getString('active_backend');
     if (['laptop', 'cloud', 'anthropic', 'local'].contains(saved)) {
       activeBackendId.value = saved!;
@@ -154,10 +162,20 @@ class ChatController extends GetxController {
     await rebuildBackend();
     await saved;
     error.value = null;
+    if (id == 'laptop' && shared.ready) {
+      _sharedRevision = -1;
+      _sharedChanged();
+    } else {
+      messages.assignAll(_storage.loadMessages().map(ChatMessage.fromJson));
+    }
   }
 
   Future<void> send(String text) async {
     if (text.trim().isEmpty || isGenerating.value) return;
+    if (activeBackendId.value == 'laptop' && backend is LaptopNodeBackend) {
+      await _sendShared(text.trim());
+      return;
+    }
     final content = text.trim();
     final context =
         int.tryParse(_storage.getString('context_tokens') ?? '') ?? 4096;
@@ -220,6 +238,12 @@ class ChatController extends GetxController {
   }
 
   Future<void> clearChat() async {
+    if (activeBackendId.value == 'laptop' && shared.ready) {
+      await stopGeneration();
+      await shared.create();
+      await shared.refresh();
+      return;
+    }
     final cancelling = rebuildBackend();
     messages.clear();
     error.value = null;
@@ -228,6 +252,17 @@ class ChatController extends GetxController {
   }
 
   Future<void> stopGeneration() async {
+    if (activeBackendId.value == 'laptop' && shared.ready) {
+      await rebuildBackend();
+      try {
+        await shared.cancel();
+      } catch (failure) {
+        error.value = '$failure';
+      }
+      shared.invalidate();
+      await shared.refresh();
+      return;
+    }
     if (!isGenerating.value) return;
     final partial = streamingText.value;
     final current = _backend;
@@ -276,9 +311,91 @@ class ChatController extends GetxController {
   Future<void> _persist() =>
       _storage.saveMessages(messages.map((m) => m.toJson()).toList());
 
+  void _sharedChanged() {
+    if (isClosed ||
+        isGenerating.value ||
+        activeBackendId.value != 'laptop' ||
+        !shared.ready) return;
+    final chat = shared.current;
+    if (chat?.id == _sharedId && (chat?.revision ?? -1) == _sharedRevision) {
+      return;
+    }
+    final switched = chat?.id != _sharedId;
+    _sharedId = chat?.id;
+    _sharedRevision = chat?.revision ?? -1;
+    messages.assignAll(chat?.messages ?? []);
+    streamingText.value = '';
+    if (switched && chat != null) {
+      _storage.setString('context_tokens', '${chat.contextTokens}');
+      _storage.setString('system_prompt', chat.systemPrompt);
+    }
+  }
+
+  Future<void> _sendShared(String content) async {
+    if (!shared.ready ||
+        !shared.online ||
+        shared.busy ||
+        shared.current?.activeRequest != null) {
+      error.value = shared.current?.activeRequest != null
+          ? 'A reply is already running on the coordinator.'
+          : 'Connect to the laptop and wait for conversation sync before sending.';
+      retryDraft.value = content;
+      return;
+    }
+    final generation = ++_generation;
+    isGenerating.value = true;
+    error.value = null;
+    streamingText.value = '';
+    final current = backend;
+    try {
+      await current.ensureReady();
+      if (generation != _generation || isClosed) return;
+      if (shared.current == null && !await shared.create()) {
+        throw StateError(shared.error ?? 'Could not create a conversation.');
+      }
+      if (generation != _generation || isClosed) return;
+      final chat = shared.current!;
+      final context =
+          int.tryParse(_storage.getString('context_tokens') ?? '') ??
+              chat.contextTokens;
+      final system = _storage.getString('system_prompt') ?? chat.systemPrompt;
+      messages.assignAll(
+          [...chat.messages, ChatMessage(role: 'user', content: content)]);
+      if (current is! LaptopNodeBackend) {
+        throw StateError('Shared conversations require the laptop backend.');
+      }
+      final random = Random.secure();
+      final requestId = List.generate(
+              16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'))
+          .join();
+      await for (final chunk in current.chatConversation(
+          chat, content, requestId,
+          contextTokens: context, systemPrompt: system)) {
+        if (generation != _generation || isClosed) return;
+        streamingText.value += chunk.delta;
+        if (chunk.done) break;
+      }
+    } catch (failure) {
+      if (generation == _generation && !isClosed) {
+        error.value = '$failure';
+        retryDraft.value = content;
+      }
+    } finally {
+      if (generation == _generation && !isClosed) {
+        isGenerating.value = false;
+        shared.invalidate();
+        await shared.refresh();
+        _sharedRevision = -1;
+        _sharedChanged();
+      }
+    }
+  }
+
   @override
   void onClose() {
     _generation++;
+    shared.removeListener(_sharedChanged);
+    shared.dispose();
     _backend?.dispose();
     super.onClose();
   }

@@ -15,6 +15,7 @@ import '../../widgets/reveal.dart';
 import '../../widgets/status_dot.dart';
 import '../../widgets/terminal_window.dart';
 import '../connection/connection_controller.dart';
+import 'performance_panel.dart';
 
 class ServerPage extends ConsumerWidget {
   const ServerPage({super.key});
@@ -62,6 +63,11 @@ class ServerPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Server'), actions: [
+        IconButton(
+            tooltip: 'Performance dashboard',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const PerformancePage())),
+            icon: const Icon(LucideIcons.gauge, size: 20)),
         IconButton(
             tooltip: 'Refresh server',
             onPressed: node.refreshing ? null : node.refresh,
@@ -275,6 +281,8 @@ class ServerPage extends ConsumerWidget {
                                   ? 'Waiting for a coordinator connection.'
                                   : node.eventLog,
                               style: mono(13))),
+                      const SizedBox(height: 24),
+                      PerformancePanel(node: node),
                       if (node.cluster?['log'] is String) ...[
                         const SizedBox(height: 12),
                         Text(node.cluster!['log'] as String, style: mono(12)),

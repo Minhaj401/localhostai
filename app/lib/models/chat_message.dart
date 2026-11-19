@@ -5,6 +5,7 @@ class ChatMessage {
     this.backend,
     this.model,
     this.interrupted = false,
+    this.generating = false,
   });
 
   final String role; // 'user' | 'assistant' | 'system'
@@ -12,6 +13,7 @@ class ChatMessage {
   final String? backend; // which engine produced it (for the UI badge)
   final String? model;
   final bool interrupted;
+  final bool generating;
 
   Map<String, dynamic> toJson() => {
         'role': role,
@@ -27,5 +29,6 @@ class ChatMessage {
         backend: json['backend'] as String?,
         model: json['model'] as String?,
         interrupted: json['interrupted'] == true,
+        generating: json['generating'] == true,
       );
 }

@@ -32,6 +32,9 @@ use crate::managed::{InstallTask, Managed};
 use crate::plan::{self, ModelInfo, SplitPlan};
 use crate::rpc::{WorkerReport, WorkerStatus};
 
+mod benchmark;
+mod workspace;
+
 /// Live view of the node for the TUI status bar.
 #[derive(Debug, Clone, Default)]
 pub struct ServerStatus {
@@ -90,6 +93,10 @@ struct Inner {
     inference_slots: Arc<Semaphore>,
     engine_probe_failures: std::sync::atomic::AtomicU64,
     live_hardware: bool,
+    conversations: crate::conversations::ConversationStore,
+    performance: crate::performance::Performance,
+    inference_gate: Arc<tokio::sync::RwLock<()>>,
+    benchmarks: benchmark::Benchmarks,
 }
 
 const MAX_BUFFERED_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -344,6 +351,12 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         inference_slots: Arc::new(Semaphore::new(2)),
         engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
         live_hardware: true,
+        conversations: crate::conversations::ConversationStore::open(
+            crate::config::home().join("conversations"),
+        )?,
+        performance: Default::default(),
+        inference_gate: Default::default(),
+        benchmarks: Default::default(),
         cfg,
     });
 
@@ -997,6 +1010,44 @@ async fn dispatch(
     }
 
     // ---- device / cluster API -------------------------------------------------
+    if path.starts_with("/conversations")
+        || path == "/performance"
+        || path == "/ping"
+        || path.starts_with("/benchmarks")
+    {
+        let response = workspace::dispatch(&inner, method, path_raw, &body).await;
+        let (code, value) = match response {
+            Ok(value) => value,
+            Err(error) => (
+                error
+                    .downcast_ref::<crate::conversations::StoreError>()
+                    .map(|e| e.0)
+                    .unwrap_or(500),
+                json!({"error":{"message":format!("{error:#}")}}),
+            ),
+        };
+        return respond_cors(
+            &mut stream,
+            code,
+            "application/json",
+            value.to_string().as_bytes(),
+        )
+        .await;
+    }
+    // A benchmark owns model loads and inference until both measurements and
+    // cleanup finish. Ordinary chat and destructive model controls cannot race it.
+    let _control_gate = if method == "POST"
+        && matches!(
+            path.as_str(),
+            "/cluster/start" | "/managed/delete" | "/managed/runtime/reset" | "/peers/toggle"
+        ) {
+        match inner.inference_gate.clone().try_read_owned() {
+            Ok(gate) => Some(gate),
+            Err(_) => return respond_cors(&mut stream, 409, "application/json", b"{\"error\":\"Benchmark in progress; cancel it before changing models or devices.\"}").await,
+        }
+    } else {
+        None
+    };
     if path == "/managed" && method == "GET" {
         let body = serde_json::to_vec(&inner.managed.view().await)?;
         return respond_cors(&mut stream, 200, "application/json", &body).await;
@@ -1575,6 +1626,7 @@ async fn dispatch(
             "generation": st.generation,
             "peers": st.peers, "layers_on_self": st.layers_on_self,
             "total_layers": st.total_layers, "assignments": st.assignments,
+            "ctx": st.ctx,
             "error": st.error,
             "log": st.log_path,
             "toolchain": inner.cluster.toolchain().map(|t| json!({
@@ -1743,6 +1795,7 @@ async fn dispatch(
     }
 
     if path == "/cluster/stop" && method == "POST" {
+        inner.benchmarks.cancel();
         let r = inner.cluster.stop().await;
         refresh_engine(&inner).await;
         let b = match r {
@@ -1778,7 +1831,22 @@ async fn dispatch(
             )
             .await
         }
-        ("POST", "/v1/chat/completions") => chat_completions(inner, stream, body).await,
+        ("POST", "/v1/chat/completions") => {
+            if serde_json::from_slice::<Value>(&body)
+                .ok()
+                .is_some_and(|v| v.get("conversation_id").is_some())
+                && !authorized(&inner, head)
+            {
+                return respond_cors(
+                    &mut stream,
+                    401,
+                    "application/json",
+                    b"{\"error\":\"pair token required for shared conversations\"}",
+                )
+                .await;
+            }
+            chat_completions(inner, stream, body).await
+        }
         _ => {
             respond_cors(
                 &mut stream,
@@ -1854,6 +1922,9 @@ fn request_context(req: &Value, default: u32) -> Option<u32> {
 // ------------------------------------------------------------------- chat
 
 async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8>) -> Result<()> {
+    let Ok(_gate) = inner.inference_gate.clone().try_read_owned() else {
+        return respond_cors(&mut stream, 409, "application/json", b"{\"error\":{\"message\":\"Benchmark in progress; wait or cancel it before chatting.\"}}").await;
+    };
     let Ok(_slot) = inner.inference_slots.clone().try_acquire_owned() else {
         return respond_cors(&mut stream, 429, "application/json", b"{\"error\":{\"message\":\"the inference queue is full; retry after the current reply\"}}").await;
     };
@@ -1914,8 +1985,79 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
     }
 
     let streaming = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let conversation_id = req
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let mut turn = None;
+    if let Some(id) = &conversation_id {
+        let cluster = inner.cluster.status().await;
+        let requested_ctx = request_context(&req, inner.cfg.ctx).unwrap_or(0);
+        let context = if cluster.state == crate::cluster::ClusterState::Running {
+            requested_ctx.min(cluster.ctx)
+        } else {
+            requested_ctx
+        };
+        let turn_request = crate::conversations::TurnRequest {
+            revision: req["revision"].as_u64().unwrap_or(0),
+            request_id: req["request_id"].as_str().unwrap_or("").into(),
+            content: req["content"].as_str().unwrap_or("").into(),
+            model: req["model"].as_str().map(String::from),
+            ctx: context,
+            system_prompt: req["system_prompt"].as_str().unwrap_or("").into(),
+        };
+        let store = inner.conversations.clone();
+        let id = id.clone();
+        match tokio::task::spawn_blocking(move || store.begin(&id, turn_request)).await? {
+            Ok((lease, conversation)) => {
+                req["messages"] = json!(conversation.prompt());
+                let maximum = u64::from(context / 4).min(1024);
+                req["max_tokens"] =
+                    json!(req["max_tokens"].as_u64().unwrap_or(maximum).min(maximum));
+                turn = Some(lease);
+            }
+            Err(error) => {
+                let code = error
+                    .downcast_ref::<crate::conversations::StoreError>()
+                    .map(|e| e.0)
+                    .unwrap_or(500);
+                return respond_cors(
+                    &mut stream,
+                    code,
+                    "application/json",
+                    json!({"error":{"message":error.to_string()}})
+                        .to_string()
+                        .as_bytes(),
+                )
+                .await;
+            }
+        }
+    }
+    for key in [
+        "conversation_id",
+        "revision",
+        "request_id",
+        "content",
+        "ctx",
+        "system_prompt",
+    ] {
+        req.as_object_mut().unwrap().remove(key);
+    }
+    if streaming {
+        req["stream_options"] = json!({"include_usage":true});
+        if matches!(
+            status.backend.as_str(),
+            "managed" | "distributed" | "llamacpp"
+        ) {
+            req["timings_per_token"] = json!(true);
+        }
+    }
+    let mut measured = inner
+        .performance
+        .track(req["model"].as_str().map(String::from), conversation_id);
     let url = format!("{}/chat/completions", upstream.trim_end_matches('/'));
-
+    let mut sent_stream_headers = false;
+    let result: Result<()> = async {
     let resp = inner.http.post(&url).json(&req).send().await;
     let resp = match resp {
         Ok(r) => r,
@@ -1939,6 +2081,7 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
         let code = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
         let b = json!({ "error": { "message": text, "type": "upstream_error" } });
+        measured.sample.metrics.error = Some(text.clone());
         return respond_cors(
             &mut stream,
             code,
@@ -1963,6 +2106,9 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
                 .await
             }
         };
+        measured.sample.observe(&v, false)?;
+        measured.sample.finished = true;
+        if let Some(turn) = &mut turn { turn.checkpoint(&measured.sample.text, true)?; }
         return respond_cors(
             &mut stream,
             200,
@@ -1979,11 +2125,29 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
         stream.write_all(head.as_bytes()),
     )
     .await??;
+    sent_stream_headers = true;
     let mut upstream = resp.bytes_stream();
     use futures::StreamExt;
-    while let Some(chunk) = upstream.next().await {
+    let mut checkpoint = tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut disconnected = [0u8; 1];
+    loop {
+        let chunk = tokio::select! {
+            chunk = upstream.next() => chunk,
+            _ = checkpoint.tick() => {
+                measured.publish();
+                if let Some(turn) = &mut turn { turn.checkpoint(&measured.sample.text, false)?; }
+                continue;
+            }
+            _ = stream.read(&mut disconnected), if !measured.sample.finished => { bail!("client disconnected; partial reply retained"); }
+        };
+        let Some(chunk) = chunk else { break; };
         match chunk {
             Ok(bytes) => {
+                measured.sample.feed(&bytes)?;
+                measured.publish();
+                if measured.sample.finished {
+                    if let Some(mut lease) = turn.take() { lease.checkpoint(&measured.sample.text, true)?; }
+                }
                 if !matches!(
                     tokio::time::timeout(
                         std::time::Duration::from_secs(10),
@@ -1992,7 +2156,8 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
                     .await,
                     Ok(Ok(()))
                 ) {
-                    break;
+                    if measured.sample.finished { break; }
+                    bail!("client disconnected; partial reply retained");
                 }
                 let _ = stream.flush().await;
             }
@@ -2000,17 +2165,35 @@ async fn chat_completions(inner: Arc<Inner>, mut stream: TcpStream, body: Vec<u8
                 inner
                     .status_tx
                     .send_modify(|s| s.last_error = Some(format!("stream: {e}")));
-                let error =
-                    json!({"error": {"message": format!("upstream stream interrupted: {e}")}});
-                let _ = stream
-                    .write_all(format!("data: {error}\n\n").as_bytes())
-                    .await;
-                break;
+                bail!("upstream stream interrupted: {e}");
             }
         }
     }
-    let _ = stream.shutdown().await;
+    measured.sample.end()?;
+    if let Some(turn) = &mut turn { turn.checkpoint(&measured.sample.text, true)?; }
     Ok(())
+    }.await;
+    if let Err(error) = &result {
+        if let Some(turn) = &mut turn {
+            let _ = turn.checkpoint(&measured.sample.text, false);
+        }
+        if sent_stream_headers {
+            let event = json!({"error":{"message":error.to_string()}});
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                stream.write_all(format!("data: {event}\n\n").as_bytes()),
+            )
+            .await;
+        }
+    }
+    let error = result
+        .as_ref()
+        .err()
+        .map(|error| error.to_string())
+        .or(measured.sample.metrics.error.clone());
+    measured.finish(error);
+    let _ = stream.shutdown().await;
+    result
 }
 
 // ----------------------------------------------------------------- response
@@ -2040,7 +2223,7 @@ async fn respond_cors(
         _ => "Unknown",
     };
     let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -2058,6 +2241,105 @@ async fn respond_cors(
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn conversations_sync_over_http_with_private_access_conflicts_export_and_metrics() {
+        let node = TestNode::with_pairing(false).await;
+        let client = reqwest::Client::new();
+        let a = crate::api::Node::with_token(&node.url, Some("MixedCaseToken".into()));
+        let b = a.clone();
+        for path in ["/conversations", "/performance", "/benchmarks", "/ping"] {
+            assert_eq!(
+                client
+                    .get(format!("{}{path}", node.url))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                401
+            );
+        }
+        let created = a
+            .post_json("/conversations", &json!({"title":"Shared notes"}))
+            .await
+            .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap();
+        let revision = created["conversation"]["revision"].as_u64().unwrap();
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        node.inner.status_tx.send_modify(|status| {
+            status.upstream = Some(format!("http://{}", upstream.local_addr().unwrap()));
+            status.backend = "llamacpp".into();
+        });
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = upstream.accept().await.unwrap();
+            let request = read_request(&mut socket, None).await.unwrap().unwrap();
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["messages"][0]["content"], "Remember 日本語");
+            assert!(body.get("conversation_id").is_none());
+            let data = "data: {\"choices\":[{\"delta\":{\"content\":\"Saved 🙂\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"timings\":{\"predicted_n\":3,\"predicted_per_second\":12.0}}\n\ndata: [DONE]\n\n";
+            respond_cors(&mut socket, 200, "text/event-stream", data.as_bytes())
+                .await
+                .unwrap();
+        });
+        let body = json!({"conversation_id":id,"revision":revision,"request_id":crate::conversations::new_id().unwrap(),"content":"Remember 日本語","stream":true,"ctx":2048});
+        assert_eq!(
+            client
+                .post(format!("{}/v1/chat/completions", node.url))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        let response = client
+            .post(format!("{}/v1/chat/completions", node.url))
+            .bearer_auth("MixedCaseToken")
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert!(response.text().await.unwrap().contains("Saved 🙂"));
+        task.await.unwrap();
+        let latest = b.get_json(&format!("/conversations/{id}")).await.unwrap();
+        assert_eq!(latest["conversation"]["messages"][1]["content"], "Saved 🙂");
+        assert_eq!(latest["conversation"]["messages"][1]["interrupted"], false);
+        assert!(latest["conversation"]["active_request"].is_null());
+        assert!(b
+            .post_json(
+                &format!("/conversations/{id}"),
+                &json!({"revision":revision,"title":"stale"})
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            a.get_json("/conversations?query=%E6%97%A5%E6%9C%AC%E8%AA%9E")
+                .await
+                .unwrap()["conversations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(b
+            .get_json(&format!("/conversations/{id}/export?format=markdown"))
+            .await
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("Saved 🙂"));
+        let metrics = b.get_json("/performance").await.unwrap();
+        assert_eq!(metrics["generations"][0]["output_tokens"], 3);
+        assert_eq!(metrics["generations"][0]["state"], "complete");
+        let _gate = node.inner.inference_gate.clone().write_owned().await;
+        assert!(b
+            .post_json("/v1/chat/completions", &json!({"messages":[]}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Benchmark"));
+    }
 
     #[test]
     fn secret_and_control_routes_require_auth_even_on_loopback_and_browser_origins_are_rejected() {
@@ -2084,6 +2366,13 @@ mod tests {
             inference_slots: Arc::new(Semaphore::new(2)),
             engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
             live_hardware: false,
+            conversations: crate::conversations::ConversationStore::open(
+                directory.path().join("conversations"),
+            )
+            .unwrap(),
+            performance: Default::default(),
+            inference_gate: Default::default(),
+            benchmarks: Default::default(),
         };
         assert_eq!(
             access_error(&inner, "GET /pair HTTP/1.1\r\n\r\n"),
@@ -2104,6 +2393,105 @@ mod tests {
         url: String,
         task: tokio::task::JoinHandle<()>,
         _directory: tempfile::TempDir,
+    }
+
+    /// A real native engine/RPC run with the test node's deterministic capacity
+    /// fixture. This isolates orchestration from unrelated desktop memory use.
+    #[tokio::test]
+    #[ignore = "set LOCALHOSTAI_BENCHMARK_TEST_MODEL to a small GGUF and install matching llama.cpp tools"]
+    async fn native_benchmark_records_real_timings_placement_and_cleans_up() {
+        let model_path = std::env::var("LOCALHOSTAI_BENCHMARK_TEST_MODEL").expect("test GGUF path");
+        let node = TestNode::new().await;
+        let api = crate::api::Node::with_token(&node.url, Some("MixedCaseToken".into()));
+        let tools = node
+            .inner
+            .cluster
+            .toolchain()
+            .expect("matching llama.cpp tools");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut worker = tokio::process::Command::new(tools.rpc_server)
+            .args([
+                "-H",
+                "127.0.0.1",
+                "-p",
+                &port.to_string(),
+                "-t",
+                "1",
+                "--device",
+                "CPU",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let address = format!("127.0.0.1:{port}");
+        for _ in 0..100 {
+            if crate::rpc::probe(&address).await.compatible {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let model = api
+            .post_json(
+                "/models",
+                &json!({"path":model_path,"name":"benchmark-test"}),
+            )
+            .await
+            .unwrap();
+        assert!(model["model"]["layers"].as_u64().unwrap() >= 2);
+        api.post_json("/peers",&json!({"id":"benchmark-worker","name":"Native loopback worker","kind":"phone","ram_mb":3000,"available_mb":3000,"rpc":address})).await.unwrap();
+        api.post_json("/benchmarks/start",&json!({"model":"benchmark-test","ctx":128,"max_tokens":16,"prompt":"Tell a short story."})).await.unwrap();
+        let mut benchmark = Value::Null;
+        for _ in 0..600 {
+            benchmark = api.get_json("/benchmarks").await.unwrap()["benchmark"].clone();
+            if benchmark["state"] != "running" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        node.inner.benchmarks.cancel();
+        node.inner.cluster.stop().await.unwrap();
+        worker.kill().await.unwrap();
+        worker.wait().await.unwrap();
+        assert_eq!(benchmark["state"], "complete", "{benchmark}");
+        let results = benchmark["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "{benchmark}");
+        for result in results {
+            assert_eq!(result["state"], "complete", "{result}");
+            assert!(
+                result["metrics"]["ttft_ms"].as_f64().unwrap() > 0.0,
+                "{result}"
+            );
+            assert!(
+                result["metrics"]["output_tokens"].as_u64().unwrap() > 0,
+                "{result}"
+            );
+            assert!(
+                result["metrics"]["tokens_per_second"].as_f64().unwrap() > 0.0,
+                "{result}"
+            );
+            assert!(
+                result["peak_engine_rss_mb"].as_u64().unwrap() > 0,
+                "{result}"
+            );
+        }
+        assert!(results[0]["plan"]["assignments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["rpc"].is_null()));
+        assert!(results[1]["plan"]["assignments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| !a["rpc"].is_null() && a["layers"].as_u64().unwrap() > 0));
+        assert_eq!(
+            node.inner.cluster.status().await.state,
+            crate::cluster::ClusterState::Stopped
+        );
     }
 
     impl TestNode {
@@ -2140,6 +2528,13 @@ mod tests {
                 inference_slots: Arc::new(Semaphore::new(2)),
                 engine_probe_failures: std::sync::atomic::AtomicU64::new(0),
                 live_hardware: false,
+                conversations: crate::conversations::ConversationStore::open(
+                    directory.path().join("conversations"),
+                )
+                .unwrap(),
+                performance: Default::default(),
+                inference_gate: Default::default(),
+                benchmarks: Default::default(),
             });
             let state = inner.clone();
             let task = tokio::spawn(async move {

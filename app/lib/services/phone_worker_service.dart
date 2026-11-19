@@ -380,6 +380,7 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
         if (reason != null) 'error': _reportText(reason),
         if (nativeOutput.isNotEmpty) 'log_tail': _reportText(nativeOutput),
         if (_proc != null) 'releasable_mb': _processAnonymousMb(_proc!.pid),
+        if (_proc != null) 'rss_mb': _processRssMb(_proc!.pid),
       };
 
   static int _processAnonymousMb(int pid) {
@@ -390,6 +391,17 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
       return (int.tryParse(line.split(RegExp(r'\s+'))[1]) ?? 0) ~/ 1024;
     } catch (_) {
       return 0;
+    }
+  }
+
+  static int? _processRssMb(int pid) {
+    try {
+      final status = File('/proc/$pid/status').readAsStringSync();
+      final line =
+          status.split('\n').firstWhere((line) => line.startsWith('VmRSS:'));
+      return int.parse(line.split(RegExp(r'\s+'))[1]) ~/ 1024;
+    } catch (_) {
+      return null;
     }
   }
 

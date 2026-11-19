@@ -18,6 +18,8 @@ import java.net.NetworkInterface
 
 class MainActivity : FlutterActivity() {
     private var workerStopCallback: (() -> Unit)? = null
+    private var exportResult: MethodChannel.Result? = null
+    private var exportContent: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -26,6 +28,29 @@ class MainActivity : FlutterActivity() {
         WorkerKeepAliveService.onStop = workerStopCallback
         channel.setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "exportConversation" -> {
+                        val content = call.argument<String>("content")
+                        val name = call.argument<String>("filename")
+                        if (exportResult != null) {
+                            result.error("export_busy", "Finish the current export first", null)
+                        } else if (content == null || name == null || content.length > 4 * 1024 * 1024) {
+                            result.error("invalid_export", "Invalid conversation export", null)
+                        } else {
+                            exportResult = result
+                            exportContent = content
+                            try {
+                                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = call.argument<String>("mime") ?: "text/plain"
+                                    putExtra(Intent.EXTRA_TITLE, name)
+                                }, 8201)
+                            } catch (error: Exception) {
+                                exportResult = null
+                                exportContent = null
+                                result.error("export_failed", error.message, null)
+                            }
+                        }
+                    }
                     // Bundled rpc-server lives here (extracted, executable).
                     "nativeLibDir" -> result.success(applicationInfo.nativeLibraryDir)
                     "cacheDir" -> result.success(cacheDir.absolutePath)
@@ -94,6 +119,9 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        exportResult?.error("export_cancelled", "App closed during export", null)
+        exportResult = null
+        exportContent = null
         if (WorkerKeepAliveService.onStop === workerStopCallback) {
             WorkerKeepAliveService.onStop = null
             WorkerKeepAliveService.stop(this) { }
@@ -125,5 +153,29 @@ class MainActivity : FlutterActivity() {
             ?.flatMap { it.inetAddresses.toList() }
             ?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }
             ?.hostAddress
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 8201) return
+        val result = exportResult ?: return
+        val content = exportContent
+        exportResult = null
+        exportContent = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null || content == null) {
+            result.success(false)
+            return
+        }
+        Thread {
+            try {
+                val output = contentResolver.openOutputStream(uri, "wt")
+                    ?: throw java.io.IOException("Cannot open selected document")
+                output.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+                runOnUiThread { result.success(true) }
+            } catch (error: Exception) {
+                runOnUiThread { result.error("export_failed", error.message, null) }
+            }
+        }.start()
     }
 }

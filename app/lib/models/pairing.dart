@@ -46,7 +46,9 @@ class PairPayload {
   static PairPayload? tryParse(String raw) {
     try {
       final uri = Uri.parse(raw.trim());
-      if (uri.scheme != 'localhostai' ||
+      // `privateml` was the scheme before the localhost.ai rename; keep
+      // accepting it so an older laptop binary or APK still pairs.
+      if (uri.scheme != 'localhostai' && uri.scheme != 'privateml' ||
           uri.host != 'pair' ||
           uri.path.isNotEmpty ||
           uri.userInfo.isNotEmpty ||

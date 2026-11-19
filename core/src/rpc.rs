@@ -19,6 +19,10 @@ pub struct WorkerReport {
     pub log_tail: Option<String>,
     /// Resident anonymous pages that disappear when this worker process stops.
     pub releasable_mb: Option<u64>,
+    /// Actual worker resident set, sampled by the phone at heartbeat time.
+    pub rss_mb: Option<u64>,
+    /// Phone-observed authenticated HTTP round trip, not an RPC socket probe.
+    pub coordinator_rtt_ms: Option<f64>,
 }
 
 impl WorkerReport {
@@ -30,6 +34,10 @@ impl WorkerReport {
             && self.error.as_ref().is_none_or(|error| error.len() <= 8192)
             && self.log_tail.as_ref().is_none_or(|log| log.len() <= 8192)
             && self.releasable_mb.is_none_or(|memory| memory <= 1_048_576)
+            && self.rss_mb.is_none_or(|memory| memory <= 1_048_576)
+            && self
+                .coordinator_rtt_ms
+                .is_none_or(|ms| ms.is_finite() && (0.0..=60000.0).contains(&ms))
     }
 }
 

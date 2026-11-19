@@ -17,6 +17,17 @@ void main() {
       expect(p.baseUrl, 'http://192.168.1.20:8765');
     });
 
+    test('still parses the pre-rename privateml scheme', () {
+      // QRs from laptop binaries built before the localhost.ai rename.
+      const raw = 'privateml://pair?h=192.168.1.20&p=8765'
+          '&t=0123456789abcdef0123456789abcdef&n=workstation';
+      final p = PairPayload.tryParse(raw);
+      expect(p, isNotNull);
+      expect(p!.host, '192.168.1.20');
+      expect(p.port, 8765);
+      expect(p.baseUrl, 'http://192.168.1.20:8765');
+    });
+
     test('rejects foreign QR codes instead of guessing', () {
       expect(PairPayload.tryParse('https://example.com'), isNull);
       expect(PairPayload.tryParse('hello'), isNull);

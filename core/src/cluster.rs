@@ -48,6 +48,8 @@ pub struct ClusterStatus {
     pub log_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_pid: Option<u32>,
+    #[serde(default)]
+    pub ctx: u32,
 }
 
 impl Default for ClusterStatus {
@@ -66,6 +68,7 @@ impl Default for ClusterStatus {
             server_port: 8081,
             log_path: String::new(),
             server_pid: None,
+            ctx: 4096,
         }
     }
 }
@@ -365,6 +368,7 @@ impl Cluster {
                 layers_on_self: self_layers,
                 total_layers: plan.total_layers,
                 assignments: plan.assignments.clone(),
+                ctx,
                 server_port,
                 log_path: log_path.display().to_string(),
                 ..Default::default()

@@ -16,12 +16,14 @@
 pub mod api;
 pub mod cluster;
 pub mod config;
+pub mod conversations;
 pub mod discovery;
 pub mod gguf;
 pub mod hardware;
 pub mod managed;
 pub mod model_hub;
 pub mod network;
+pub mod performance;
 pub mod plan;
 pub mod qr;
 pub mod rpc;

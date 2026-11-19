@@ -5,6 +5,8 @@ mod app;
 mod cli;
 mod model_browser;
 mod ui;
+mod workspace;
+mod workspace_ui;
 
 use anyhow::{bail, Context, Result};
 use api::{ApiEvent, Health, Node};
@@ -21,6 +23,11 @@ use std::io::{self, Write};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 enum UiEvent {
+    ConversationReady {
+        generation: u64,
+        conversation: localhostai_core::conversations::Conversation,
+    },
+    Workspace(workspace::Update),
     Key(crossterm::event::KeyEvent),
     Paste(String),
     Api {
@@ -470,6 +477,7 @@ async fn event_loop(
 ) -> Result<()> {
     let mut app = App::new(node.base().into(), String::new());
     apply_snapshot(&mut app, snapshot(&node).await);
+    workspace::initialize(&mut app, &node).await;
     prepare_first_run(&mut app);
     let (tx, mut rx) = mpsc::unbounded_channel();
     let key_tx = tx.clone();
@@ -508,6 +516,7 @@ async fn event_loop(
         }
     }
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(4));
+    let mut workspace_ticker = tokio::time::interval(std::time::Duration::from_secs(1));
     ticker.tick().await;
     let mut refreshing = false;
     let mut chat_generation = 0u64;
@@ -561,10 +570,19 @@ async fn event_loop(
                     let area = ui::centered_rect(88, 25, f.area());
                     ui::help_panel(f, area);
                 }
+                Overlay::Conversations => {
+                    let area = ui::centered_rect(100, 26, f.area());
+                    ui::conversations_panel(f, &app, area);
+                }
+                Overlay::Performance => {
+                    let area = ui::centered_rect(112, 30, f.area());
+                    ui::performance_panel(f, &app, area);
+                }
                 Overlay::None => {}
             }
         })?;
         let event = tokio::select! {
+            _ = workspace_ticker.tick() => { workspace::refresh(&mut app,&node,&tx); continue; }
             event = rx.recv() => match event { Some(event) => event, None => break },
             _ = ticker.tick() => {
                 if !refreshing { request_snapshot(&node, &tx); refreshing = true; }
@@ -572,6 +590,15 @@ async fn event_loop(
             }
         };
         match event {
+            UiEvent::ConversationReady {
+                generation,
+                conversation,
+            } => {
+                if generation == chat_generation {
+                    app.workspace.current = Some(conversation);
+                }
+            }
+            UiEvent::Workspace(update) => workspace::apply(&mut app, update),
             UiEvent::Paste(text) => app.paste(&text),
             UiEvent::Browse { request_id, result } => app.browser.apply(request_id, result),
             UiEvent::Downloaded {
@@ -737,6 +764,8 @@ async fn event_loop(
             UiEvent::Api { generation, event } if generation == chat_generation => match event {
                 ApiEvent::Chunk(text) => app.streaming.push_str(&text),
                 ApiEvent::Done => {
+                    app.workspace.invalidate();
+                    app.workspace.draft.clear();
                     app.messages.push(Msg {
                         role: "assistant".into(),
                         content: std::mem::take(&mut app.streaming),
@@ -748,7 +777,18 @@ async fn event_loop(
                     chat_task = None;
                 }
                 ApiEvent::Failed(error) => {
-                    app.streaming.clear();
+                    app.workspace.invalidate();
+                    if app.input.is_empty() {
+                        app.input = std::mem::take(&mut app.workspace.draft);
+                        app.input_cursor = app.input.len();
+                    }
+                    if !app.streaming.is_empty() {
+                        app.messages.push(Msg {
+                            role: "assistant".into(),
+                            content: std::mem::take(&mut app.streaming),
+                            tag: Some("interrupted".into()),
+                        });
+                    }
                     app.notice = Some(error.clone());
                     app.busy = false;
                     app.activity_message = error;
@@ -767,6 +807,7 @@ async fn event_loop(
             }
             UiEvent::Key(key) => {
                 match app.key(key) {
+                    Action::Workspace(action) => workspace::launch(&mut app, action, &node, &tx),
                     Action::Quit => break,
                     Action::None => {}
                     Action::Refresh => {
@@ -916,6 +957,21 @@ async fn event_loop(
                         });
                     }
                     Action::CancelChat => {
+                        if let Some(chat) = &app.workspace.current {
+                            if let Some(request_id) = &chat.active_request {
+                                let node = node.clone();
+                                let id = chat.id.clone();
+                                let request_id = request_id.clone();
+                                tokio::spawn(async move {
+                                    let _ = node
+                                        .post_json(
+                                            &format!("/conversations/{id}/cancel"),
+                                            &json!({"request_id":request_id}),
+                                        )
+                                        .await;
+                                });
+                            }
+                        }
                         chat_generation = chat_generation.wrapping_add(1);
                         if let Some(task) = chat_task.take() {
                             task.abort();
@@ -990,6 +1046,16 @@ async fn event_loop(
                         });
                     }
                     Action::Send => {
+                        let content = app.input.clone();
+                        app.workspace.invalidate();
+                        app.workspace.draft = content.clone();
+                        let supported = app.workspace.supported;
+                        let mut conversation = app.workspace.current.clone();
+                        if let Some(chat) = &mut conversation {
+                            chat.model = app.model.clone();
+                            chat.ctx = app.context_tokens;
+                            chat.system_prompt = app.system_prompt.clone();
+                        }
                         app.messages.push(Msg {
                             role: "user".into(),
                             content: std::mem::take(&mut app.input),
@@ -1008,8 +1074,40 @@ async fn event_loop(
                         let history = app.history();
                         let model = app.model.clone();
                         let system = app.system_prompt.clone();
+                        let ctx = app.context_tokens;
+                        let ready_tx = tx.clone();
                         let (api_tx, api_rx) = mpsc::unbounded_channel();
                         chat_task = Some(tokio::spawn(async move {
+                            if supported {
+                                let result: Result<()> = async {
+                                    let mut chat = match conversation {
+                                        Some(chat) => chat,
+                                        None => serde_json::from_value::<
+                                            localhostai_core::conversations::Conversation,
+                                        >(
+                                            node.post_json("/conversations", &json!({})).await?
+                                                ["conversation"]
+                                                .clone(),
+                                        )?,
+                                    };
+                                    chat.model = model.clone();
+                                    chat.ctx = ctx;
+                                    chat.system_prompt = system.clone();
+                                    let _ = ready_tx.send(UiEvent::ConversationReady {
+                                        generation,
+                                        conversation: chat.clone(),
+                                    });
+                                    let _ = node
+                                        .conversation_stream(&chat, &content, api_tx.clone())
+                                        .await;
+                                    Ok(())
+                                }
+                                .await;
+                                if let Err(error) = result {
+                                    let _ = api_tx.send(ApiEvent::Failed(format!("{error:#}")));
+                                }
+                                return;
+                            }
                             // The core client emits exactly one Failed event for
                             // every error, including transport failures.
                             let _ = node
@@ -1021,6 +1119,9 @@ async fn event_loop(
                 }
             }
         }
+    }
+    if let Some(task) = chat_task {
+        task.abort();
     }
     Ok(())
 }

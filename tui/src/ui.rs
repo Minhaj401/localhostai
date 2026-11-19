@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::app::{App, Msg};
+pub use crate::workspace_ui::{conversations_panel, performance_panel};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -54,7 +55,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::DarkGray)
             },
         ),
-        Span::raw("  ↑ models · F1 help · Ctrl+A activity"),
+        Span::raw("  ↑ models · Ctrl+O chats · Ctrl+G metrics · F1 help"),
     ];
     let activity_style = if app.activity_error {
         Style::default().fg(Color::Red)
@@ -123,11 +124,15 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         " · scroll paused · PgDn latest"
     };
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" chat · {}{scroll} ", app.base_url)),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+                " {} · {}{scroll} ",
+                app.workspace
+                    .current
+                    .as_ref()
+                    .map(|c| c.title.as_str())
+                    .unwrap_or("New chat"),
+                app.base_url
+            )))
         .highlight_symbol("");
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -768,6 +773,8 @@ pub fn help_panel(f: &mut Frame, area: Rect) {
         )),
         Line::from("  Enter send · ↑ models · Ctrl+D devices · Ctrl+P pair"),
         Line::from("  Ctrl+A activity · Ctrl+X stop generation/model · Esc quit/close"),
+        Line::from("  Ctrl+O saved chats · Ctrl+N new chat · Ctrl+G live performance"),
+        Line::from("  Chats: type to search · Ctrl+R rename · Ctrl+E Markdown · Ctrl+Y JSON"),
         Line::from("  PageUp/PageDown scroll conversation"),
         Line::from(""),
         Line::from(Span::styled(

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'llm_backend.dart';
 import '../models/chat_message.dart';
+import '../models/conversation.dart';
 
 /// Talks to a localhost.ai-LAN node discovered on the local network
 /// (or entered manually). The heavy inference runs on the laptop's
@@ -114,4 +115,29 @@ class LaptopNodeBackend extends LlmBackend {
 
   @override
   Future<void> dispose() async => _http.close();
+
+  Stream<StreamChunk> chatConversation(
+      Conversation conversation, String content, String requestId,
+      {required int contextTokens, required String systemPrompt}) async* {
+    final request =
+        http.Request('POST', Uri.parse('$baseUrl/v1/chat/completions'))
+          ..headers.addAll(_authHeaders)
+          ..body = jsonEncode({
+            'conversation_id': conversation.id,
+            'revision': conversation.revision,
+            'request_id': requestId,
+            'content': content,
+            'model': _model,
+            'ctx': contextTokens,
+            'system_prompt': systemPrompt,
+            'stream': true
+          });
+    final response =
+        await _http.send(request).timeout(const Duration(seconds: 300));
+    if (response.statusCode >= 400) {
+      throw StateError(
+          'Node error ${response.statusCode}: ${await response.stream.bytesToString()}');
+    }
+    yield* parseOpenAiStream(response);
+  }
 }

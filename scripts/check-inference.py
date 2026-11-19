@@ -183,6 +183,8 @@ def main():
     parser.add_argument("--llama-server", required=True)
     parser.add_argument("--rpc-server", required=True)
     parser.add_argument("--temp-dir", default="/tmp/opencode")
+    parser.add_argument("--ctx", type=int, default=1024)
+    parser.add_argument("--benchmark-only", action="store_true")
     options = parser.parse_args()
     binary = str(Path(options.binary).resolve())
     llama = str(Path(options.llama_server).resolve())
@@ -219,7 +221,7 @@ def main():
             print("PASS installed catalog model validates offline", flush=True)
         registered = require(base, "/models", {"name": "integration-model", "path": model})["model"]
         assert registered["layers"] > 0 and registered["kv_bytes_per_token"] > 0
-        load = {"model": "integration-model", "ctx": 1024}
+        load = {"model": "integration-model", "ctx": options.ctx}
         local = require(base, "/cluster/start", load)
         assert local["ok"] and not local["status"]["peers"]
         check_placement(local)
@@ -252,6 +254,28 @@ def main():
 
         stack.callback(stop, node)
         self_id = next(device["id"] for device in require(base, "/peers")["devices"] if device["self"])
+        before_benchmark = {device["id"]:device["enabled"] for device in require(base,"/peers")["devices"]}
+        require(base,"/benchmarks/start",{**load,"max_tokens":16,"prompt":"Tell a short story."})
+        with poll_pool(base,workers):
+            for _ in range(1000):
+                benchmark = require(base,"/benchmarks")["benchmark"]
+                require(base,"/performance")
+                if benchmark["state"] != "running":
+                    break
+                time.sleep(.2)
+        assert benchmark["state"] == "complete", benchmark
+        assert len(benchmark["results"]) == 2, benchmark
+        for result in benchmark["results"]:
+            assert result["state"] == "complete", result
+            assert result["metrics"]["output_tokens"] > 0 and result["metrics"]["ttft_ms"] > 0, result
+            assert result["metrics"]["tokens_per_second"] > 0 and result["peak_engine_rss_mb"] > 0, result
+            check_placement({"plan":result["plan"],"status":{"log_path":result["log_path"]}})
+        assert any(a["rpc"] and a["layers"] for a in benchmark["results"][1]["plan"]["assignments"])
+        assert require(base,"/cluster")["state"] == "stopped"
+        assert before_benchmark == {device["id"]:device["enabled"] for device in require(base,"/peers")["devices"]}
+        print("PASS real laptop/distributed benchmark, token timings, measured RSS, placement, and unchanged inclusion settings",flush=True)
+        if options.benchmark_only:
+            return
         require(base, "/peers/toggle", {"id": self_id, "enabled": False})
 
         with poll_pool(base, workers):

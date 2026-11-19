@@ -45,7 +45,11 @@ impl PairPayload {
 
     /// Parse a scanned URI back into a payload.
     pub fn parse(uri: &str) -> Option<Self> {
-        let rest = uri.strip_prefix("localhostai://pair?")?;
+        // `privateml` was the scheme before the localhost.ai rename; keep
+        // accepting it so an older phone APK still pairs.
+        let rest = uri
+            .strip_prefix("localhostai://pair?")
+            .or_else(|| uri.strip_prefix("privateml://pair?"))?;
         let mut host = None;
         let mut port = None;
         let mut token = None;
@@ -174,6 +178,19 @@ mod tests {
         let uri = p.uri();
         let back = PairPayload::parse(&uri).expect("parse");
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn parses_pre_rename_privateml_scheme() {
+        // QRs from phone APKs built before the localhost.ai rename.
+        let back = PairPayload::parse(
+            "privateml://pair?h=192.168.1.20&p=8765&t=abc123&n=laptop",
+        )
+        .expect("legacy scheme should parse");
+        assert_eq!(back.host, "192.168.1.20");
+        assert_eq!(back.port, 8765);
+        assert_eq!(back.token, "abc123");
+        assert_eq!(back.name, "laptop");
     }
 
     #[test]
