@@ -54,6 +54,10 @@ class _PoolScreenState extends State<PoolScreen> {
   static const double _reserveMaxMb = 8192;
   static const int _reserveDivisions = (8192 - 256) ~/ 128;
 
+  /// Matches the laptop's kind-based default for phones
+  /// (`Hardware::default_reserve_mb`) until the profile carries the choice.
+  static const int _defaultPhoneReserveMb = 900;
+
   @override
   void initState() {
     super.initState();
@@ -250,13 +254,24 @@ class _PoolScreenState extends State<PoolScreen> {
     );
   }
 
+  /// Budget this phone would offer with [reserve] kept free — the same
+  /// `min(total, available) - reserve` rule the coordinator applies.
+  int _phoneBudgetMb(int reserve) {
+    final totalCapacity =
+        widget.profile.ramMb > reserve ? widget.profile.ramMb - reserve : 0;
+    final freeCapacity = widget.profile.availableMb > reserve
+        ? widget.profile.availableMb - reserve
+        : 0;
+    return totalCapacity < freeCapacity ? totalCapacity : freeCapacity;
+  }
+
   Widget _memoryPanel(TextTheme theme) {
     final memory = _memory;
     final laptop = (memory != null && memory.totalMb > 0) ? memory : null;
     final laptopValue = _laptopReserveDraft ?? memory?.effectiveReserveMb ?? 0;
     final phoneValue = _phoneReserveDraft ??
         widget.phoneReserveMb ??
-        DeviceProfile.defaultReserveMb;
+        _defaultPhoneReserveMb;
     final running = (_cluster?['state']?.toString() ?? 'stopped') == 'running';
     final children = <Widget>[];
     if (laptop != null) {
@@ -285,8 +300,7 @@ class _PoolScreenState extends State<PoolScreen> {
         theme,
         title: 'Phone reserve',
         valueMb: phoneValue,
-        offeredMb: DeviceProfile.shareBudgetMb(
-            widget.profile.ramMb, widget.profile.availableMb, phoneValue),
+        offeredMb: _phoneBudgetMb(phoneValue),
         totalMb: widget.profile.ramMb,
         onChanged: (value) => setState(() => _phoneReserveDraft = value.round()),
         onChangeEnd: (value) => widget.onPhoneReserveChanged!(value.round()),
