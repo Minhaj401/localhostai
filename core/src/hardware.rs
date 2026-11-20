@@ -42,6 +42,10 @@ pub struct Hardware {
     pub can_host_layers: bool,
     /// E.g. "arm64" / "x86_64".
     pub arch: String,
+    /// Reserve this device keeps free for its own OS and apps (MiB). Phones
+    /// report their own choice; `None` falls back to the kind-based default.
+    #[serde(default)]
+    pub reserve_mb: Option<u64>,
     #[serde(default)]
     pub memory: MemoryTelemetry,
 }
@@ -73,10 +77,40 @@ impl Hardware {
     /// Safe upper bound for a new model allocation. Busy devices advertise
     /// less memory instead of promising RAM already in use by other apps.
     pub fn share_budget_mb(kind: &str, ram_mb: u64, available_mb: u64) -> u64 {
-        let reserve = Self::default_reserve_mb(kind);
+        Self::share_budget_mb_with_reserve(ram_mb, available_mb, Self::default_reserve_mb(kind))
+    }
+
+    /// Same budget with an explicit reserve (MiB kept free for the OS/apps).
+    pub fn share_budget_mb_with_reserve(ram_mb: u64, available_mb: u64, reserve_mb: u64) -> u64 {
         ram_mb
-            .saturating_sub(reserve)
-            .min(available_mb.min(ram_mb).saturating_sub(reserve))
+            .saturating_sub(reserve_mb)
+            .min(available_mb.min(ram_mb).saturating_sub(reserve_mb))
+    }
+
+    /// Reserve this device actually uses: its reported choice, or the
+    /// kind-based default when it did not report one.
+    pub fn effective_reserve_mb(&self) -> u64 {
+        self.reserve_mb
+            .unwrap_or_else(|| Self::default_reserve_mb(&self.kind))
+    }
+
+    /// Apply a user-configured reserve, overriding the kind-based default.
+    /// Records the choice on the hardware so later recomputations (released
+    /// allocations, live refresh) keep honoring it.
+    pub fn apply_reserve_override(&mut self, reserve_mb: Option<u64>) {
+        let Some(reserve) = reserve_mb else { return };
+        self.set_reserve_override(Some(reserve));
+    }
+
+    /// Set or clear the user reserve, recomputing the budget either way.
+    /// Clearing falls back to the kind-based default instead of keeping a
+    /// stale explicit value.
+    pub fn set_reserve_override(&mut self, reserve_mb: Option<u64>) {
+        self.reserve_mb = reserve_mb;
+        let reserve = self.effective_reserve_mb();
+        self.budget_mb =
+            Self::share_budget_mb_with_reserve(self.ram_mb, self.available_mb, reserve);
+        self.can_host_layers = self.budget_mb > 0;
     }
 
     /// Build from raw numbers, applying reserve + thread tiering.
@@ -105,6 +139,7 @@ impl Hardware {
             threads: Self::tier_threads(ram_mb, cores),
             can_host_layers: budget > 0,
             arch: arch.to_string(),
+            reserve_mb: None,
             memory: MemoryTelemetry::default(),
         }
     }
@@ -358,6 +393,35 @@ fn is_laptop() -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserve_override_replaces_the_kind_default() {
+        let mut hw =
+            Hardware::from_raw_available("local", "laptop", "laptop", 16000, 12000, 8, "x86_64");
+        let default_budget = hw.budget_mb;
+        assert_eq!(default_budget, 10600);
+
+        hw.apply_reserve_override(Some(4000));
+        assert_eq!(hw.reserve_mb, Some(4000));
+        assert_eq!(hw.budget_mb, 8000);
+        assert!(hw.can_host_layers);
+
+        // The recorded choice survives a budget recomputation, e.g. after a
+        // released allocation frees 500 MiB more.
+        let recomputed = Hardware::share_budget_mb_with_reserve(
+            hw.ram_mb,
+            hw.available_mb + 500,
+            hw.effective_reserve_mb(),
+        );
+        assert_eq!(recomputed, 8500);
+
+        // None keeps the kind-based default.
+        let mut untouched =
+            Hardware::from_raw_available("local", "laptop", "laptop", 16000, 12000, 8, "x86_64");
+        untouched.apply_reserve_override(None);
+        assert_eq!(untouched.reserve_mb, None);
+        assert_eq!(untouched.budget_mb, default_budget);
+    }
 
     #[test]
     fn missing_availability_never_promises_total_memory() {

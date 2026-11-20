@@ -807,6 +807,8 @@ and CORS headers are not emitted.
 | GET | `/peers` | Device statistics, inclusion, reachability, heartbeat, and allocation. |
 | POST | `/peers` | Register or heartbeat a device. |
 | POST | `/peers/toggle` | Include or exclude a device from future plans. |
+| GET | `/config/memory` | Memory tuning: laptop reserve, remote headroom, and the resulting budget. |
+| POST | `/config/memory` | Change `reserve_mb` (or `null` for the kind default) and `remote_headroom_mb`; persists to `config.toml`. |
 | GET | `/cluster` | Cluster state, toolchain, peers, logs, and assignments. |
 | POST | `/cluster/plan` | Produce a split plan. |
 | POST | `/cluster/start` | Plan and start a registered GGUF. |
@@ -1389,6 +1391,9 @@ automation.
 - The foreground sharing service reduces suspension/background kills, but
   Android memory pressure, user force-stop, or network loss can still end a run.
 - Device include/exclude choices persist in `~/.localhostai/devices.json`.
+- The laptop reserve and remote headroom can be tuned from the app's pool
+  screen (`/config/memory`); other settings still live in
+  `~/.localhostai/config.toml`.
 - Active allocation remains the planner's estimate. `/performance` separately
   reports measured engine RSS and aged phone worker RSS samples.
 - GGUF block counts are read from the file, but memory placement remains an

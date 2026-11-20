@@ -91,6 +91,9 @@ final routerProvider = Provider<GoRouter>((ref) {
                         client: node.client!,
                         profile: node.profile,
                         contextTokens: node.contextTokens,
+                        phoneReserveMb: node.phoneReserveMb,
+                        onPhoneReserveChanged: (mb) =>
+                            ref.read(connectionProvider).setPhoneReserveMb(mb),
                       );
               }))),
     ],

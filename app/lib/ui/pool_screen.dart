@@ -11,11 +11,21 @@ class PoolScreen extends StatefulWidget {
     required this.client,
     required this.profile,
     this.contextTokens = 4096,
+    this.phoneReserveMb,
+    this.onPhoneReserveChanged,
   });
 
   final NodeClient client;
   final DeviceProfile profile;
   final int contextTokens;
+
+  /// What this phone keeps free for Android and the app. Null hides the
+  /// phone slider (the shell passes it only when a controller can persist).
+  final int? phoneReserveMb;
+
+  /// Called when the user picks a new phone reserve; the controller persists
+  /// it and the next heartbeat re-reports the profile to the laptop.
+  final ValueChanged<int>? onPhoneReserveChanged;
 
   @override
   State<PoolScreen> createState() => _PoolScreenState();
@@ -33,12 +43,31 @@ class _PoolScreenState extends State<PoolScreen> {
   bool _initialLoading = true;
   Map<String, dynamic>? _cluster;
   late int _contextTokens;
+  LaptopMemory? _memory;
+  int? _laptopReserveDraft;
+  int? _phoneReserveDraft;
+  bool _savingMemory = false;
+
+  /// Slider bounds and step, in MiB. Wide enough for small phones and
+  /// big-desktop reserves, coarse enough to be meaningful.
+  static const double _reserveMinMb = 256;
+  static const double _reserveMaxMb = 8192;
+  static const int _reserveDivisions = (8192 - 256) ~/ 128;
 
   @override
   void initState() {
     super.initState();
     _contextTokens = widget.contextTokens;
+    _phoneReserveDraft = widget.phoneReserveMb;
     _refresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant PoolScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.phoneReserveMb != oldWidget.phoneReserveMb) {
+      _phoneReserveDraft = widget.phoneReserveMb;
+    }
   }
 
   Future<void> _refresh() async {
@@ -49,12 +78,14 @@ class _PoolScreenState extends State<PoolScreen> {
       widget.client.peers(),
       widget.client.clusterStatus(),
       widget.client.health(),
+      widget.client.memoryConfig(),
     ]);
     if (!mounted) return;
     final models = (results[0] as List<String>).toSet().toList();
     final devices = results[1] as List<PoolDevice>;
     final cluster = results[2] as Map<String, dynamic>?;
     final health = results[3] as NodeInfo?;
+    final memory = results[4] as LaptopMemory?;
     if (health == null) {
       setState(() {
         _busy = false;
@@ -77,6 +108,7 @@ class _PoolScreenState extends State<PoolScreen> {
         _plan = null;
       }
       _cluster = cluster;
+      _memory = memory;
       _connectionError = false;
       _busy = false;
       _initialLoading = false;
@@ -148,6 +180,120 @@ class _PoolScreenState extends State<PoolScreen> {
           : 'Could not stop the model. Check the laptop connection and retry.';
     });
     await _refresh();
+  }
+
+  Future<void> _saveLaptopReserve(double value) async {
+    final mb = value.round();
+    setState(() {
+      _savingMemory = true;
+      _laptopReserveDraft = mb;
+    });
+    final updated = await widget.client.setMemoryConfig(reserveMb: mb);
+    if (!mounted) return;
+    setState(() {
+      _savingMemory = false;
+      if (updated != null) {
+        _memory = updated;
+        _notice = null;
+        _noticeError = false;
+      } else {
+        _noticeError = true;
+        _notice =
+            'The laptop did not accept the new reserve. Check the connection and try again.';
+      }
+    });
+    if (updated != null) await _refresh();
+  }
+
+  /// One reserve slider: what the device keeps for itself and what is left
+  /// for the pool. Used for both the laptop (persisted on the coordinator)
+  /// and this phone (persisted locally, re-reported in heartbeats).
+  Widget _reserveRow(
+    TextTheme theme, {
+    required String title,
+    required int valueMb,
+    required int offeredMb,
+    required int totalMb,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    final clamped = valueMb
+        .clamp(_reserveMinMb.toInt(), _reserveMaxMb.toInt());
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(title, style: theme.titleSmall)),
+            Text(
+              '${(clamped / 1024).toStringAsFixed(1)} GB',
+              style: mono(13, color: C.accent, w: FontWeight.w600),
+            ),
+          ],
+        ),
+        Slider(
+          value: clamped.toDouble(),
+          min: _reserveMinMb,
+          max: _reserveMaxMb,
+          divisions: _reserveDivisions,
+          label: '${(clamped / 1024).toStringAsFixed(1)} GB',
+          onChanged: _savingMemory ? null : onChanged,
+          onChangeEnd: _savingMemory ? null : onChangeEnd,
+        ),
+        Text(
+          'keeps ${(clamped / 1024).toStringAsFixed(1)} GB for itself · '
+          'offers ${(offeredMb / 1024).toStringAsFixed(1)} GB of '
+          '${(totalMb / 1024).toStringAsFixed(1)} GB to the pool',
+          style: theme.bodySmall,
+        ),
+      ],
+    );
+  }
+
+  Widget _memoryPanel(TextTheme theme) {
+    final memory = _memory;
+    final laptop = (memory != null && memory.totalMb > 0) ? memory : null;
+    final laptopValue = _laptopReserveDraft ?? memory?.effectiveReserveMb ?? 0;
+    final phoneValue = _phoneReserveDraft ??
+        widget.phoneReserveMb ??
+        DeviceProfile.defaultReserveMb;
+    final running = (_cluster?['state']?.toString() ?? 'stopped') == 'running';
+    final children = <Widget>[];
+    if (laptop != null) {
+      children.add(_reserveRow(
+        theme,
+        title: 'Laptop reserve',
+        valueMb: laptopValue,
+        offeredMb: laptop.budgetForReserveMb(laptopValue),
+        totalMb: laptop.totalMb,
+        onChanged: (value) => setState(() => _laptopReserveDraft = value.round()),
+        onChangeEnd: _saveLaptopReserve,
+      ));
+      if (running) {
+        children.add(Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            'Applies to the next model load.',
+            style: theme.bodySmall?.copyWith(color: C.text3),
+          ),
+        ));
+      }
+    }
+    if (widget.onPhoneReserveChanged != null) {
+      if (laptop != null) children.add(const SizedBox(height: 8));
+      children.add(_reserveRow(
+        theme,
+        title: 'Phone reserve',
+        valueMb: phoneValue,
+        offeredMb: DeviceProfile.shareBudgetMb(
+            widget.profile.ramMb, widget.profile.availableMb, phoneValue),
+        totalMb: widget.profile.ramMb,
+        onChanged: (value) => setState(() => _phoneReserveDraft = value.round()),
+        onChangeEnd: (value) => widget.onPhoneReserveChanged!(value.round()),
+      ));
+    }
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.start, children: children);
   }
 
   @override
@@ -281,6 +427,17 @@ class _PoolScreenState extends State<PoolScreen> {
                             ),
                           ),
                           const SectionGap(),
+                          if ((_memory != null && _memory!.totalMb > 0) ||
+                              widget.onPhoneReserveChanged != null) ...[
+                            const SectionHeader(
+                              'Memory reserves',
+                              subtitle:
+                                  'How much each device keeps for itself.',
+                            ),
+                            const SizedBox(height: 12),
+                            AppPanel(child: _memoryPanel(theme.textTheme)),
+                            const SectionGap(),
+                          ],
                           const SectionHeader(
                             'Devices',
                             subtitle: 'Only reachable, enabled workers count.',

@@ -74,6 +74,12 @@ struct Peer {
 
 struct Inner {
     cfg: Config,
+    /// Memory tuning changed at runtime from the app or TUI. Seeded from the
+    /// config at startup; persisted back to `config.toml` on every change.
+    memory_tuning: std::sync::RwLock<MemoryTuning>,
+    /// Where `config.toml` lives, kept here so runtime changes persist to the
+    /// file this node actually loaded (tests point it at a temp directory).
+    config_path: std::path::PathBuf,
     pair_token: String,
     status_tx: watch::Sender<ServerStatus>,
     http: reqwest::Client,
@@ -101,6 +107,43 @@ struct Inner {
 
 const MAX_BUFFERED_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 64;
+
+/// The two memory knobs a user can turn without editing `config.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MemoryTuning {
+    /// MiB kept free on this laptop for the OS and apps; `None` restores the
+    /// kind-based default.
+    reserve_mb: Option<u64>,
+    /// MiB kept back from every remote device's budget for RPC buffers.
+    remote_headroom_mb: u64,
+}
+
+impl MemoryTuning {
+    fn from_config(cfg: &Config) -> Self {
+        Self {
+            reserve_mb: cfg.reserve_mb,
+            remote_headroom_mb: cfg.remote_headroom_mb,
+        }
+    }
+}
+
+impl Inner {
+    /// Read the current tuning. A poisoned lock falls back to the startup
+    /// config rather than failing every plan.
+    fn memory_tuning(&self) -> MemoryTuning {
+        self.memory_tuning
+            .read()
+            .map(|tuning| *tuning)
+            .unwrap_or_else(|poisoned| *poisoned.into_inner())
+    }
+
+    fn set_memory_tuning(&self, tuning: MemoryTuning) {
+        *self
+            .memory_tuning
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = tuning;
+    }
+}
 
 struct Request {
     head: String,
@@ -236,7 +279,8 @@ impl NodeHandle {
                 ));
             }
         }
-        let mut plan = plan::plan(m, &devices, ctx);
+        let headroom = self.inner.memory_tuning().remote_headroom_mb;
+        let mut plan = plan::plan_with_headroom(m, &devices, ctx, headroom);
         for assignment in &mut plan.assignments {
             assignment.worker_session = sessions.remove(&assignment.device_id);
         }
@@ -327,7 +371,9 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         (None, ())
     };
 
-    let hardware = Hardware::probe_self(&cfg.node_name);
+    let mut hardware = Hardware::probe_self(&cfg.node_name);
+    hardware.apply_reserve_override(cfg.reserve_mb);
+    let memory_tuning = MemoryTuning::from_config(&cfg);
     let device_enabled = crate::config::load_device_state();
     let self_enabled = device_enabled.get(&hardware.id).copied().unwrap_or(true);
     let inner = Arc::new(Inner {
@@ -357,6 +403,8 @@ pub async fn start(cfg: Config) -> Result<NodeHandle> {
         performance: Default::default(),
         inference_gate: Default::default(),
         benchmarks: Default::default(),
+        memory_tuning: std::sync::RwLock::new(memory_tuning),
+        config_path: crate::config::config_path(),
         cfg,
     });
 
@@ -732,22 +780,47 @@ fn credit_released_allocation(
             .available_mb
             .saturating_add(releasable_mb.unwrap_or(0).min(assignment.memory_mb))
             .min(hardware.ram_mb);
-        hardware.budget_mb = Hardware::share_budget_mb(&hardware.kind, hardware.ram_mb, available);
+        hardware.budget_mb = Hardware::share_budget_mb_with_reserve(
+            hardware.ram_mb,
+            available,
+            hardware.effective_reserve_mb(),
+        );
         hardware.can_host_layers = hardware.budget_mb > 0;
     }
 }
 
 fn current_self_hardware(inner: &Inner) -> Hardware {
     let stored = &inner.hardware;
-    if !inner.live_hardware {
-        return stored.clone();
-    }
-    let mut live = Hardware::probe_self(&stored.name);
-    // Identity is stable; capacity and cgroup constraints are live and may be
-    // tightened after startup by a service/container manager.
-    live.id = stored.id.clone();
-    live.name = stored.name.clone();
-    live
+    let mut hardware = if inner.live_hardware {
+        let mut live = Hardware::probe_self(&stored.name);
+        // Identity is stable; capacity and cgroup constraints are live and may be
+        // tightened after startup by a service/container manager.
+        live.id = stored.id.clone();
+        live.name = stored.name.clone();
+        live
+    } else {
+        stored.clone()
+    };
+    // The reserve is a user choice, not a probe result: re-apply it on every
+    // read so a change from the app takes effect on the next plan.
+    hardware.set_reserve_override(inner.memory_tuning().reserve_mb);
+    hardware
+}
+
+/// What a client needs to render the reserve sliders: the current tuning,
+/// the effective laptop budget, and the kind default for context.
+fn memory_snapshot(inner: &Inner) -> Value {
+    let tuning = inner.memory_tuning();
+    let hw = current_self_hardware(inner);
+    json!({
+        "reserve_mb": tuning.reserve_mb,
+        "effective_reserve_mb": hw.effective_reserve_mb(),
+        "remote_headroom_mb": tuning.remote_headroom_mb,
+        "default_reserve_mb": Hardware::default_reserve_mb(&hw.kind),
+        "total_mb": hw.ram_mb,
+        "available_mb": hw.available_mb,
+        "budget_mb": hw.budget_mb,
+    })
 }
 
 // ---------------------------------------------------------------- connection
@@ -1039,7 +1112,11 @@ async fn dispatch(
     let _control_gate = if method == "POST"
         && matches!(
             path.as_str(),
-            "/cluster/start" | "/managed/delete" | "/managed/runtime/reset" | "/peers/toggle"
+            "/cluster/start"
+                | "/managed/delete"
+                | "/managed/runtime/reset"
+                | "/peers/toggle"
+                | "/config/memory"
         ) {
         match inner.inference_gate.clone().try_read_owned() {
             Ok(gate) => Some(gate),
@@ -1320,7 +1397,7 @@ async fn dispatch(
             }
         };
         let ram_mb = body["ram_mb"].as_u64().unwrap_or(0);
-        let hw = Hardware::from_raw_available(
+        let mut hw = Hardware::from_raw_available(
             body["id"].as_str().unwrap_or("peer"),
             body["name"].as_str().unwrap_or("device"),
             body["kind"].as_str().unwrap_or("phone"),
@@ -1332,6 +1409,11 @@ async fn dispatch(
                 .unwrap_or(4),
             body["arch"].as_str().unwrap_or("arm64"),
         );
+        // A device may keep a different reserve than our kind-based default;
+        // trust its reported choice (bounded) over our guess.
+        if let Some(reserve) = body["reserve_mb"].as_u64().filter(|r| *r <= 65_536) {
+            hw.apply_reserve_override(Some(reserve));
+        }
         if hw.id.is_empty() || hw.id == inner.hardware.id || hw.ram_mb == 0 {
             return respond_cors(
                 &mut stream,
@@ -1542,6 +1624,139 @@ async fn dispatch(
             200,
             "application/json",
             b.to_string().as_bytes(),
+        )
+        .await;
+    }
+
+    // Memory tuning: what each device keeps for itself. Both methods require
+    // the pair token even when unauthenticated chat is allowed, because the
+    // reserve decides where model layers are placed (invariant 13).
+    if path == "/config/memory" && method == "GET" {
+        if !authorized(&inner, head) {
+            return respond_cors(
+                &mut stream,
+                401,
+                "application/json",
+                b"{\"error\":{\"message\":\"pair token required\"}}",
+            )
+            .await;
+        }
+        return respond_cors(
+            &mut stream,
+            200,
+            "application/json",
+            memory_snapshot(&inner).to_string().as_bytes(),
+        )
+        .await;
+    }
+    if path == "/config/memory" && method == "POST" {
+        if !authorized(&inner, head) {
+            return respond_cors(
+                &mut stream,
+                401,
+                "application/json",
+                b"{\"error\":{\"message\":\"pair token required\"}}",
+            )
+            .await;
+        }
+        let req: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+        let mut next = inner.memory_tuning();
+        if let Some(field) = req.get("reserve_mb") {
+            match field {
+                Value::Null => next.reserve_mb = None,
+                Value::Number(value) => {
+                    let Some(mb) = value.as_u64() else {
+                        return respond_cors(
+                            &mut stream,
+                            400,
+                            "application/json",
+                            b"{\"error\":\"reserve_mb must be a whole number of MiB or null\"}",
+                        )
+                        .await;
+                    };
+                    if mb > 65_536 {
+                        return respond_cors(
+                            &mut stream,
+                            400,
+                            "application/json",
+                            b"{\"error\":\"reserve_mb must be at most 65536 MiB\"}",
+                        )
+                        .await;
+                    }
+                    next.reserve_mb = Some(mb);
+                }
+                _ => {
+                    return respond_cors(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        b"{\"error\":\"reserve_mb must be a whole number of MiB or null\"}",
+                    )
+                    .await;
+                }
+            }
+        }
+        if let Some(field) = req.get("remote_headroom_mb") {
+            match field {
+                Value::Number(value) => {
+                    let Some(mb) = value.as_u64() else {
+                        return respond_cors(
+                            &mut stream,
+                            400,
+                            "application/json",
+                            b"{\"error\":\"remote_headroom_mb must be a whole number of MiB\"}",
+                        )
+                        .await;
+                    };
+                    if mb > 8192 {
+                        return respond_cors(
+                            &mut stream,
+                            400,
+                            "application/json",
+                            b"{\"error\":\"remote_headroom_mb must be at most 8192 MiB\"}",
+                        )
+                        .await;
+                    }
+                    next.remote_headroom_mb = mb;
+                }
+                _ => {
+                    return respond_cors(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        b"{\"error\":\"remote_headroom_mb must be a whole number of MiB\"}",
+                    )
+                    .await;
+                }
+            }
+        }
+        // Persist before applying: if config.toml cannot be written, the node
+        // keeps its current tuning instead of drifting from its own config.
+        let mut persisted = inner.cfg.clone();
+        persisted.reserve_mb = next.reserve_mb;
+        persisted.remote_headroom_mb = next.remote_headroom_mb;
+        if let Err(error) = persisted.save_at(&inner.config_path) {
+            return respond_cors(
+                &mut stream,
+                500,
+                "application/json",
+                json!({"error": format!("could not persist config.toml: {error:#}")})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .await;
+        }
+        inner.set_memory_tuning(next);
+        tracing::info!(
+            reserve = ?next.reserve_mb,
+            headroom = next.remote_headroom_mb,
+            "memory tuning updated"
+        );
+        return respond_cors(
+            &mut stream,
+            200,
+            "application/json",
+            memory_snapshot(&inner).to_string().as_bytes(),
         )
         .await;
     }
@@ -2346,8 +2561,11 @@ mod tests {
         let (status_tx, _) = watch::channel(ServerStatus::default());
         let (shutdown, _) = broadcast::channel(1);
         let directory = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
         let inner = Inner {
-            cfg: Config::default(),
+            memory_tuning: std::sync::RwLock::new(MemoryTuning::from_config(&cfg)),
+            config_path: directory.path().join("config.toml"),
+            cfg,
             pair_token: "secret".into(),
             status_tx,
             http: reqwest::Client::new(),
@@ -2505,11 +2723,14 @@ mod tests {
             let (status_tx, _) = watch::channel(ServerStatus::default());
             let (shutdown, _) = broadcast::channel(1);
             let directory = tempfile::tempdir().unwrap();
+            let inner_cfg = Config {
+                require_pairing,
+                ..Default::default()
+            };
             let inner = Arc::new(Inner {
-                cfg: Config {
-                    require_pairing,
-                    ..Default::default()
-                },
+                memory_tuning: std::sync::RwLock::new(MemoryTuning::from_config(&inner_cfg)),
+                config_path: directory.path().join("config.toml"),
+                cfg: inner_cfg,
                 pair_token: "MixedCaseToken".into(),
                 status_tx,
                 http: reqwest::Client::new(),
@@ -2558,6 +2779,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_reserve_is_readable_writable_and_persisted_only_with_the_pair_token() {
+        let node = TestNode::with_pairing(false).await;
+        let client = reqwest::Client::new();
+        let url = |path: &str| format!("{}{path}", node.url);
+
+        // Changing where layers may be placed is a control operation: the pair
+        // token is required even though this node allows unauthenticated chat.
+        assert_eq!(
+            client
+                .get(url("/config/memory"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+        assert_eq!(
+            client
+                .post(url("/config/memory"))
+                .json(&json!({"reserve_mb": 512}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+
+        let api = crate::api::Node::with_token(&node.url, Some("MixedCaseToken".into()));
+        let before = api.get_json("/config/memory").await.unwrap();
+        assert_eq!(before["reserve_mb"], Value::Null);
+        assert_eq!(before["remote_headroom_mb"], 256);
+        let total = before["total_mb"].as_u64().unwrap();
+        let default_reserve = before["default_reserve_mb"].as_u64().unwrap();
+        assert_eq!(
+            before["effective_reserve_mb"].as_u64().unwrap(),
+            default_reserve,
+            "no explicit reserve yet: the kind default applies"
+        );
+
+        // Out-of-range values are rejected and change nothing.
+        for invalid in [
+            json!({"reserve_mb": 65_537}),
+            json!({"reserve_mb": -512}),
+            json!({"remote_headroom_mb": 8_193}),
+            json!({"reserve_mb": "512"}),
+        ] {
+            assert_eq!(
+                client
+                    .post(url("/config/memory"))
+                    .bearer_auth("MixedCaseToken")
+                    .json(&invalid)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                400,
+                "{invalid}"
+            );
+        }
+        let after_invalid = api.get_json("/config/memory").await.unwrap();
+        assert_eq!(after_invalid["reserve_mb"], Value::Null);
+
+        // A valid update is applied, persisted, and visible to planning: a
+        // reserve above physical RAM leaves no budget for layers.
+        let raised = api
+            .post_json(
+                "/config/memory",
+                &json!({"reserve_mb": total + 512, "remote_headroom_mb": 512}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            raised["effective_reserve_mb"].as_u64().unwrap(),
+            total + 512
+        );
+        assert_eq!(raised["budget_mb"].as_u64().unwrap(), 0);
+        assert_eq!(raised["remote_headroom_mb"].as_u64().unwrap(), 512);
+        let persisted = std::fs::read_to_string(&node.inner.config_path).unwrap();
+        assert!(persisted.contains(&format!("reserve_mb = {}", total + 512)));
+        assert!(persisted.contains("remote_headroom_mb = 512"));
+
+        // The self device entry in /peers honors the new reserve immediately.
+        let peers = api.get_json("/peers").await.unwrap();
+        let self_device = peers["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["self"] == true)
+            .unwrap()
+            .clone();
+        assert_eq!(self_device["budget_mb"].as_u64().unwrap(), 0);
+
+        // Clearing the reserve restores the kind-based default instead of
+        // keeping the stale explicit value.
+        let cleared = api
+            .post_json("/config/memory", &json!({"reserve_mb": null}))
+            .await
+            .unwrap();
+        assert_eq!(cleared["reserve_mb"], Value::Null);
+        assert_eq!(
+            cleared["effective_reserve_mb"].as_u64().unwrap(),
+            default_reserve
+        );
+        assert_eq!(
+            cleared["budget_mb"].as_u64().unwrap(),
+            total.saturating_sub(default_reserve)
+        );
+        let persisted = std::fs::read_to_string(&node.inner.config_path).unwrap();
+        assert!(!persisted.contains("reserve_mb = "), "{persisted}");
+    }
+
+    #[tokio::test]
     async fn remote_model_download_controls_always_require_the_pair_token() {
         let node = TestNode::with_pairing(false).await;
         let client = reqwest::Client::new();
@@ -2602,6 +2935,7 @@ mod tests {
             "/pair",
             "/peers",
             "/peers/toggle",
+            "/config/memory",
             "/models",
             "/managed",
             "/cluster",
@@ -2627,6 +2961,7 @@ mod tests {
             "/cluster/start",
             "/cluster/plan",
             "/cluster/stop",
+            "/config/memory",
         ] {
             assert_eq!(
                 client

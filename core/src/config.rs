@@ -35,6 +35,13 @@ pub struct Config {
     pub ctx: u32,
     /// Require the pair token on every request.
     pub require_pairing: bool,
+    /// MiB kept back from every remote device's budget for llama.cpp RPC
+    /// runtime buffers. Raise it to keep phones freer; lower it to fit more
+    /// layers remotely.
+    pub remote_headroom_mb: u64,
+    /// Reserve kept free on this laptop for the OS and your apps (MiB).
+    /// When unset the kind-based default applies (laptop 1400, desktop 2048).
+    pub reserve_mb: Option<u64>,
     /// Explicit trusted exceptions to public-only model download destinations.
     pub allowed_model_hosts: Vec<String>,
 }
@@ -52,9 +59,15 @@ impl Default for Config {
             default_model: None,
             ctx: 4096,
             require_pairing: true,
+            remote_headroom_mb: default_remote_headroom_mb(),
+            reserve_mb: None,
             allowed_model_hosts: Vec::new(),
         }
     }
+}
+
+fn default_remote_headroom_mb() -> u64 {
+    256
 }
 
 fn default_node_name() -> String {
@@ -153,6 +166,12 @@ impl Config {
         if self.ctx == 0 {
             bail!("ctx must be greater than zero");
         }
+        if self.remote_headroom_mb > 8192 {
+            bail!("remote_headroom_mb must be at most 8192 MiB");
+        }
+        if self.reserve_mb.is_some_and(|reserve| reserve > 65_536) {
+            bail!("reserve_mb must be at most 65536 MiB");
+        }
         for url in [&self.ollama_url, &self.llamacpp_url].into_iter().flatten() {
             let parsed = reqwest::Url::parse(url).context("invalid engine URL")?;
             if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
@@ -171,11 +190,17 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
+        self.save_at(&config_path())
+    }
+
+    /// Persist to an explicit path. The coordinator keeps the configured path
+    /// in its state so runtime changes land in the same file it loaded.
+    pub fn save_at(&self, path: &std::path::Path) -> Result<()> {
         self.validate()?;
         fs::create_dir_all(home())?;
         let mut out = String::from("# localhost.ai node configuration\n");
         out.push_str(&toml::to_string_pretty(self)?);
-        atomic_write(&config_path(), out.as_bytes())?;
+        atomic_write(path, out.as_bytes())?;
         Ok(())
     }
 
@@ -315,6 +340,37 @@ mod tests {
         .is_err());
         assert!(Config {
             engine: "typo".into(),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn memory_reserve_settings_validate_and_round_trip() {
+        let cfg = Config {
+            remote_headroom_mb: 512,
+            reserve_mb: Some(2000),
+            ..Default::default()
+        };
+        cfg.validate().unwrap();
+        let restored: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        assert_eq!(restored.remote_headroom_mb, 512);
+        assert_eq!(restored.reserve_mb, Some(2000));
+
+        // Defaults stay intact when the fields are absent from the file.
+        let minimal: Config = toml::from_str("node_name = 'x'").unwrap();
+        assert_eq!(minimal.remote_headroom_mb, 256);
+        assert_eq!(minimal.reserve_mb, None);
+
+        assert!(Config {
+            remote_headroom_mb: 8193,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(Config {
+            reserve_mb: Some(65_537),
             ..Default::default()
         }
         .validate()

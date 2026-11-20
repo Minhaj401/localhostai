@@ -116,6 +116,52 @@ class PoolDevice {
       );
 }
 
+/// Laptop memory tuning as the coordinator reports it.
+///
+/// `reserveMb` is what the laptop keeps for its own OS and apps (`null` when
+/// the kind-based default applies); `remoteHeadroomMb` is what every remote
+/// device keeps back for RPC runtime buffers.
+class LaptopMemory {
+  final int? reserveMb;
+  final int effectiveReserveMb;
+  final int remoteHeadroomMb;
+  final int defaultReserveMb;
+  final int totalMb;
+  final int availableMb;
+  final int budgetMb;
+
+  const LaptopMemory({
+    required this.reserveMb,
+    required this.effectiveReserveMb,
+    required this.remoteHeadroomMb,
+    required this.defaultReserveMb,
+    required this.totalMb,
+    required this.availableMb,
+    required this.budgetMb,
+  });
+
+  factory LaptopMemory.fromJson(Map<String, dynamic> j) => LaptopMemory(
+        reserveMb: (j['reserve_mb'] as num?)?.toInt(),
+        effectiveReserveMb:
+            (j['effective_reserve_mb'] as num?)?.toInt() ?? 0,
+        remoteHeadroomMb:
+            (j['remote_headroom_mb'] as num?)?.toInt() ?? 0,
+        defaultReserveMb:
+            (j['default_reserve_mb'] as num?)?.toInt() ?? 0,
+        totalMb: (j['total_mb'] as num?)?.toInt() ?? 0,
+        availableMb: (j['available_mb'] as num?)?.toInt() ?? 0,
+        budgetMb: (j['budget_mb'] as num?)?.toInt() ?? 0,
+      );
+
+  /// Budget the laptop would offer to the pool with [reserve] kept free —
+  /// the same `min(total, available) - reserve` rule the coordinator uses.
+  int budgetForReserveMb(int reserve) {
+    final totalCapacity = totalMb > reserve ? totalMb - reserve : 0;
+    final freeCapacity = availableMb > reserve ? availableMb - reserve : 0;
+    return totalCapacity < freeCapacity ? totalCapacity : freeCapacity;
+  }
+}
+
 /// How a model is divided across the pool.
 class SplitPlan {
   final String model;
@@ -364,6 +410,52 @@ class NodeClient {
           .toList();
     } catch (_) {
       return const [];
+    }
+  }
+
+  /// Current memory tuning, or null when the laptop runs an older build
+  /// without `/config/memory`.
+  Future<LaptopMemory?> memoryConfig() async {
+    try {
+      final r = await _http
+          .get(Uri.parse('$baseUrl/config/memory'), headers: _headers)
+          .timeout(const Duration(seconds: 5));
+      if (r.statusCode != 200) return null;
+      return LaptopMemory.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Change what the laptop keeps for itself ([reserveMb], or clear an
+  /// explicit reserve with [useDefaultReserve]) or what every remote device
+  /// keeps back for RPC buffers ([remoteHeadroomMb]). Fields that are not
+  /// sent stay unchanged. Returns the new state, or null when the laptop
+  /// rejected the change or is unreachable.
+  Future<LaptopMemory?> setMemoryConfig({
+    int? reserveMb,
+    bool useDefaultReserve = false,
+    int? remoteHeadroomMb,
+  }) async {
+    try {
+      final r = await _http
+          .post(
+            Uri.parse('$baseUrl/config/memory'),
+            headers: _headers,
+            body: jsonEncode({
+              if (useDefaultReserve)
+                'reserve_mb': null
+              else if (reserveMb != null)
+                'reserve_mb': reserveMb,
+              if (remoteHeadroomMb != null)
+                'remote_headroom_mb': remoteHeadroomMb,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) return null;
+      return LaptopMemory.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
     }
   }
 
