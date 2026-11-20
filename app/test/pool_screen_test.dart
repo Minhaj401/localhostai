@@ -177,13 +177,14 @@ void main() {
         findsOneWidget);
 
     // Raising the laptop reserve posts the new value to the coordinator.
-    await tester.drag(find.byType(Slider).first, const Offset(160, 0));
+    // drags start at the slider's center, so push far enough to clamp.
+    await tester.drag(find.byType(Slider).first, const Offset(400, 0));
     await tester.pumpAndSettle();
     expect(postedReserve, isNotNull);
     expect(postedReserve, greaterThan(1400));
 
     // Lowering the phone reserve persists locally through the controller.
-    await tester.drag(find.byType(Slider).last, const Offset(-160, 0));
+    await tester.drag(find.byType(Slider).last, const Offset(-400, 0));
     await tester.pumpAndSettle();
     expect(phoneReserve, isNotNull);
     expect(phoneReserve, lessThan(900));

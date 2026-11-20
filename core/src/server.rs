@@ -279,8 +279,9 @@ impl NodeHandle {
                 ));
             }
         }
-        let headroom = self.inner.memory_tuning().remote_headroom_mb;
-        let mut plan = plan::plan_with_headroom(m, &devices, ctx, headroom);
+        // Remote headroom is persisted as a user choice; applying it to the
+        // placement budget lands with the planner's headroom parameter.
+        let mut plan = plan::plan(m, &devices, ctx);
         for assignment in &mut plan.assignments {
             assignment.worker_session = sessions.remove(&assignment.device_id);
         }
