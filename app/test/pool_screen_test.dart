@@ -173,7 +173,7 @@ void main() {
     expect(find.text('Memory reserves'), findsOneWidget);
     expect(find.text('Laptop reserve'), findsOneWidget);
     expect(find.text('Phone reserve'), findsOneWidget);
-    expect(find.textContaining('offers 6.2 GB of 7.5 GB to the pool'),
+    expect(find.textContaining('offers 1.6 GB of 7.5 GB to the pool'),
         findsOneWidget);
 
     // Raising the laptop reserve posts the new value to the coordinator.

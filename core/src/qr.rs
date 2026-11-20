@@ -183,10 +183,8 @@ mod tests {
     #[test]
     fn parses_pre_rename_privateml_scheme() {
         // QRs from phone APKs built before the localhost.ai rename.
-        let back = PairPayload::parse(
-            "privateml://pair?h=192.168.1.20&p=8765&t=abc123&n=laptop",
-        )
-        .expect("legacy scheme should parse");
+        let back = PairPayload::parse("privateml://pair?h=192.168.1.20&p=8765&t=abc123&n=laptop")
+            .expect("legacy scheme should parse");
         assert_eq!(back.host, "192.168.1.20");
         assert_eq!(back.port, 8765);
         assert_eq!(back.token, "abc123");
