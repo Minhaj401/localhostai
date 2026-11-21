@@ -321,6 +321,8 @@ void main() {
     expect(plannedReserve, isNotNull);
     expect(plannedReserve, greaterThan(1400),
         reason: 'the what-if reserve rides along in the plan request');
+    expect(plannedHeadroom, isNull,
+        reason: 'the headroom draft still matches the saved tuning, so it is not sent');
 
     // Loading is gated until the what-if reserves are applied.
     final load = tester.widget<FilledButton>(find.ancestor(
