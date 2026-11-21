@@ -309,13 +309,18 @@ void main() {
         findsOneWidget);
 
     // Sliders order: memory laptop, memory phone, context, what-if laptop,
-    // what-if headroom.
+    // what-if headroom. The placement sliders start below the fold, so
+    // scroll them into view before dragging.
+    await tester.ensureVisible(find.byType(Slider).at(2));
+    await tester.pumpAndSettle();
     await tester.drag(find.byType(Slider).at(2), const Offset(400, 0));
     await tester.pumpAndSettle();
     expect(plannedCtx, isNotNull);
     expect(plannedCtx, greaterThan(4096),
         reason: 'raising context re-previews automatically');
 
+    await tester.ensureVisible(find.byType(Slider).at(3));
+    await tester.pumpAndSettle();
     await tester.drag(find.byType(Slider).at(3), const Offset(400, 0));
     await tester.pumpAndSettle();
     expect(plannedReserve, isNotNull);
@@ -331,6 +336,8 @@ void main() {
     ));
     expect(load.onPressed, isNull);
 
+    await tester.ensureVisible(find.text('Apply reserves'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Apply reserves'));
     await tester.pumpAndSettle();
     expect(appliedReserve, plannedReserve);
