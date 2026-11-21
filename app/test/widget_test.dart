@@ -28,6 +28,81 @@ void main() {
       expect(p.baseUrl, 'http://192.168.1.20:8765');
     });
 
+    test('parses params in any order, like the Rust parser does', () {
+      // core/src/qr.rs splits on '&' and matches keys, so order must not matter.
+      const raw = 'localhostai://pair?t=tok&p=9000&h=10.1.2.3&n=box';
+      final p = PairPayload.tryParse(raw);
+      expect(p, isNotNull);
+      expect(p!.host, '10.1.2.3');
+      expect(p.port, 9000);
+      expect(p.token, 'tok');
+      expect(p.name, 'box');
+    });
+
+    test('trims whitespace a scanner may leave around the URI', () {
+      final p = PairPayload.tryParse(
+          '  localhostai://pair?h=10.0.0.2&p=8765&t=tok&n=n  ');
+      expect(p, isNotNull);
+      expect(p!.host, '10.0.0.2');
+    });
+
+    test('accepts the full port range but nothing outside it', () {
+      expect(PairPayload.tryParse('localhostai://pair?h=h&p=1&t=x'), isNotNull);
+      expect(
+          PairPayload.tryParse('localhostai://pair?h=h&p=65535&t=x'), isNotNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=h&p=0&t=x'), isNull);
+      expect(
+          PairPayload.tryParse('localhostai://pair?h=h&p=65536&t=x'), isNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=h&p=-1&t=x'), isNull);
+    });
+
+    test('falls back to the host as the node name when n is missing', () {
+      final p = PairPayload.tryParse('localhostai://pair?h=10.0.0.2&p=8765&t=t');
+      expect(p, isNotNull);
+      expect(p!.name, '10.0.0.2');
+      // An empty n is treated as missing, matching core/src/qr.rs.
+      final empty =
+          PairPayload.tryParse('localhostai://pair?h=10.0.0.2&p=8765&t=t&n=');
+      expect(empty, isNotNull);
+      expect(empty!.name, '10.0.0.2');
+    });
+
+    test('requires host, port and token — none may be missing', () {
+      expect(PairPayload.tryParse('localhostai://pair?p=8765&t=x'), isNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=h&t=x'), isNull);
+      expect(PairPayload.tryParse('localhostai://pair?h=h&p=8765'), isNull);
+      expect(PairPayload.tryParse(''), isNull);
+    });
+
+    test('legacy privateml QRs round trip every field', () {
+      const raw = 'privateml://pair?h=fe80%3A%3A1&p=8765'
+          '&t=a%2Bb%26c&n=my%20old%20laptop';
+      final p = PairPayload.tryParse(raw);
+      expect(p, isNotNull);
+      expect(p!.host, 'fe80::1');
+      expect(p.token, 'a+b&c');
+      expect(p.name, 'my old laptop');
+      expect(p.baseUrl, 'http://[fe80::1]:8765');
+    });
+
+    test('a QR with an explicit port in the authority is rejected', () {
+      // The laptop never emits one; a port there means a hand-crafted URI.
+      expect(
+          PairPayload.tryParse('localhostai://pair:8765?h=h&p=8765&t=x'),
+          isNull);
+    });
+
+    test('fromJson throws on payloads the scanner would reject', () {
+      expect(
+          () => PairPayload.fromJson(
+              {'host': '', 'port': 8765, 'token': 't', 'name': 'n'}),
+          throwsFormatException);
+      expect(
+          () => PairPayload.fromJson(
+              {'host': 'h', 'port': 0, 'token': 't', 'name': 'n'}),
+          throwsFormatException);
+    });
+
     test('rejects foreign QR codes instead of guessing', () {
       expect(PairPayload.tryParse('https://example.com'), isNull);
       expect(PairPayload.tryParse('hello'), isNull);

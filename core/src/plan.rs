@@ -169,12 +169,21 @@ impl SplitPlan {
 /// device holding each layer. The coordinator is filled first, followed by
 /// remote devices from largest to smallest budget.
 pub fn plan(model: &ModelInfo, devices: &[(Hardware, Option<String>)], ctx: u32) -> SplitPlan {
+    plan_with_headroom(model, devices, ctx, REMOTE_RUNTIME_HEADROOM_MB)
+}
+
+/// Same split with a configurable RPC runtime headroom — the MiB kept back
+/// from every remote device's budget for llama.cpp RPC buffers.
+pub fn plan_with_headroom(
+    model: &ModelInfo,
+    devices: &[(Hardware, Option<String>)],
+    ctx: u32,
+    remote_headroom_mb: u64,
+) -> SplitPlan {
     let total_layers = model.layers.max(1);
     let placement_budget = |hardware: &Hardware, remote: bool| {
         if remote {
-            hardware
-                .budget_mb
-                .saturating_sub(REMOTE_RUNTIME_HEADROOM_MB)
+            hardware.budget_mb.saturating_sub(remote_headroom_mb)
         } else {
             hardware.budget_mb
         }
@@ -516,6 +525,40 @@ mod tests {
         assert_eq!(p.assignments[0].layers, 3);
         assert_eq!(p.assignments[0].memory_mb, 300);
         assert_eq!(p.shortfall_mb, 100);
+    }
+
+    #[test]
+    fn remote_headroom_is_configurable() {
+        let model = ModelInfo {
+            size_mb: 400,
+            layers: 4,
+            kv_bytes_per_token: 0,
+            ..model4b()
+        };
+        let phone = || Hardware {
+            id: "phone".into(),
+            budget_mb: 600,
+            can_host_layers: true,
+            ..Default::default()
+        };
+
+        // The default 256 MiB headroom leaves 344 MiB usable: 3 of 4 layers.
+        let default = plan(&model, &[(phone(), Some("10.0.0.5:50052".into()))], 4096);
+        assert_eq!(default.assignments[0].layers, 3);
+
+        // A larger headroom keeps more RAM free and fits fewer layers.
+        let wider = plan_with_headroom(
+            &model,
+            &[(phone(), Some("10.0.0.5:50052".into()))],
+            4096,
+            400,
+        );
+        assert_eq!(wider.assignments[0].layers, 2);
+
+        // No headroom trusts the whole budget.
+        let tight =
+            plan_with_headroom(&model, &[(phone(), Some("10.0.0.5:50052".into()))], 4096, 0);
+        assert_eq!(tight.assignments[0].layers, 4);
     }
 
     #[test]

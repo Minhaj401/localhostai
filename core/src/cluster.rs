@@ -179,6 +179,8 @@ pub struct Cluster {
     probes: Arc<Mutex<HashMap<String, Arc<Mutex<ProbeSlot>>>>>,
     override_tools: Option<Toolchain>,
     log_dir: PathBuf,
+    /// How often the startup loop re-checks that RPC peers still listen.
+    peer_check_interval: std::time::Duration,
 }
 
 impl Cluster {
@@ -194,6 +196,7 @@ impl Cluster {
             probes: Arc::new(Mutex::new(HashMap::new())),
             override_tools: None,
             log_dir: crate::config::logs_dir(),
+            peer_check_interval: std::time::Duration::from_secs(10),
         }
     }
 
@@ -392,12 +395,13 @@ impl Cluster {
                 assignment.worker_session.as_deref().unwrap_or("legacy")
             )?;
         }
-        for address in plan
+        let rpc_addresses: Vec<String> = plan
             .assignments
             .iter()
             .filter(|a| a.layers > 0)
-            .filter_map(|a| a.rpc.as_ref())
-        {
+            .filter_map(|a| a.rpc.clone())
+            .collect();
+        for address in &rpc_addresses {
             self.current_status(generation).await?;
             let worker = crate::rpc::probe(address).await;
             self.current_status(generation).await?;
@@ -457,6 +461,10 @@ impl Cluster {
         let started = tokio::time::Instant::now();
         let absolute_deadline = started + std::time::Duration::from_secs(900);
         let mut progress_deadline = started + std::time::Duration::from_secs(180);
+        // The preflight probe passed seconds ago; re-check peer liveness
+        // periodically so a worker killed mid-load fails fast instead of
+        // burning the whole progress deadline.
+        let mut next_peer_check = started + self.peer_check_interval;
         let mut log_size = 0;
         loop {
             let status = self.current_status(generation).await?;
@@ -472,13 +480,52 @@ impl Cluster {
                     + std::time::Duration::from_secs(180))
                 .min(absolute_deadline);
             }
+            if !rpc_addresses.is_empty() && tokio::time::Instant::now() >= next_peer_check {
+                next_peer_check = tokio::time::Instant::now() + self.peer_check_interval;
+                let mut gone = Vec::new();
+                for address in &rpc_addresses {
+                    if crate::rpc::peer_liveness(address).await == crate::rpc::PeerLiveness::Gone {
+                        gone.push(address.clone());
+                    }
+                }
+                if !gone.is_empty() {
+                    return self
+                        .fail(
+                            generation,
+                            format!(
+                                "RPC worker {} stopped listening during model load — the phone worker exited (Android may have killed it). Keep the app open on the phone, exempt it from battery optimization, then restart sharing and reload",
+                                gone.join(", ")
+                            ),
+                        )
+                        .await;
+                }
+            }
             if tokio::time::Instant::now() >= progress_deadline
                 || tokio::time::Instant::now() >= absolute_deadline
             {
+                // Name the likely cause: a dead RPC peer or a machine that
+                // simply cannot keep up, instead of a bare timeout.
+                let mut detail = String::new();
+                if !rpc_addresses.is_empty() {
+                    let mut states = Vec::new();
+                    for address in &rpc_addresses {
+                        let state = match crate::rpc::peer_liveness(address).await {
+                            crate::rpc::PeerLiveness::Listening => "still listening",
+                            crate::rpc::PeerLiveness::Gone => "no longer listening (worker exited)",
+                            crate::rpc::PeerLiveness::Unknown => {
+                                "unreachable (phone offline or worker stopped)"
+                            }
+                        };
+                        states.push(format!("{address}: {state}"));
+                    }
+                    detail = format!("; RPC workers — {}", states.join(", "));
+                }
                 return self
                     .fail(
                         generation,
-                        "llama-server made no loading progress for 180s or exceeded the 15-minute startup limit".into(),
+                        format!(
+                            "llama-server made no loading progress for 180s or exceeded the 15-minute startup limit{detail}"
+                        ),
                     )
                     .await;
             }
@@ -1101,6 +1148,69 @@ mod tests {
 
         assert_eq!(status.state, ClusterState::Failed);
         assert!(status.error.unwrap().contains("RPC connection lost"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn peer_death_during_load_fails_startup_promptly() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let server = dir.path().join("server");
+        // The fake server prints nothing and never becomes healthy, so only
+        // the peer liveness check can end this startup early.
+        std::fs::write(&server, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let model_path = dir.path().join("model.gguf");
+        std::fs::write(&model_path, crate::gguf::fixture(1)).unwrap();
+
+        // The worker answers the preflight probe, then its listener goes
+        // away, simulating Android killing the phone app mid-load.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            crate::rpc::serve_test_probe(socket).await;
+            // Dropping the listener closes the port; later connects refuse.
+        });
+
+        let mut cluster = Cluster::new();
+        cluster.override_tools = Some(Toolchain {
+            llama_server: server.clone(),
+            rpc_server: server,
+        });
+        cluster.log_dir = dir.path().join("logs");
+        cluster.peer_check_interval = std::time::Duration::from_millis(300);
+        let model = ModelInfo {
+            name: "test".into(),
+            path: model_path.display().to_string(),
+            params_b: None,
+            size_mb: 1,
+            layers: 1,
+            kv_bytes_per_token: 0,
+            ..Default::default()
+        };
+        let phone = Hardware {
+            id: "phone".into(),
+            name: "phone".into(),
+            kind: "phone".into(),
+            budget_mb: 512,
+            can_host_layers: true,
+            ..Default::default()
+        };
+        let plan = crate::plan::plan(&model, &[(phone, Some(rpc))], 4096);
+
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cluster.start(&plan, &model_path, 4096),
+        )
+        .await
+        .expect("a worker dying mid-load should fail startup promptly")
+        .unwrap();
+
+        assert_eq!(status.state, ClusterState::Failed);
+        let error = status.error.unwrap();
+        assert!(error.contains("stopped listening during model load"));
+        assert!(error.contains("battery optimization"));
     }
 
     #[tokio::test]

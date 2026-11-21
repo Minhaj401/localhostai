@@ -69,6 +69,25 @@ class PhoneWorkerService extends GetxService with WidgetsBindingObserver {
       .invokeMethod<String>('localIp')
       .timeout(const Duration(seconds: 3));
 
+  /// Whether Android exempted sharing from battery optimization. When false,
+  /// OEM background limits can kill the worker mid-load even with the
+  /// foreground service and wakelocks held.
+  Future<bool> batteryOptimizationIgnored() async {
+    if (!_androidProtection) return true;
+    try {
+      return await _channel
+              .invokeMethod<bool>('batteryOptimizationIgnored')
+              .timeout(const Duration(seconds: 3)) ??
+          true;
+    } catch (_) {
+      return true; // Native side without the handler still works unexempted.
+    }
+  }
+
+  Future<void> requestBatteryOptimizationExemption() async {
+    await _channel.invokeMethod<void>('requestIgnoreBatteryOptimization');
+  }
+
   Future<void> start({String? allowedPeer}) async {
     final requestedEpoch = _epoch;
     if (_stopping != null) await _stopping;

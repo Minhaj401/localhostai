@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
+import '../../models/device_profile.dart';
 import '../../models/pairing.dart';
 import '../../theme/theme.dart';
 import '../../theme/tokens.dart';
@@ -253,6 +254,25 @@ class ServerPage extends ConsumerWidget {
                                   ? null
                                   : node.sharePhone,
                             ),
+                            if (node.worker.sharing.value &&
+                                node.batteryExemptionNeeded) ...[
+                              const SizedBox(height: 8),
+                              InkWell(
+                                onTap: node.requestBatteryExemption,
+                                child: Text(
+                                  'Battery optimization is on — Android may stop sharing in the background. Tap to request an exemption.',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .error),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            _ReserveSelector(node: node),
                             const SizedBox(height: 16),
                             Wrap(spacing: 32, runSpacing: 16, children: [
                               MetricTile(
@@ -291,6 +311,50 @@ class ServerPage extends ConsumerWidget {
                   ))),
                 ]),
           )),
+    );
+  }
+}
+
+/// Picks how much RAM this phone keeps free for Android and the app; the
+/// rest becomes shareable budget. Heartbeats re-report the profile, so a
+/// change reaches the laptop within seconds, even while sharing.
+class _ReserveSelector extends StatelessWidget {
+  const _ReserveSelector({required this.node});
+
+  final ConnectionController node;
+
+  static const _presetsMb = [512, 900, 1500, 2000, 3000];
+
+  @override
+  Widget build(BuildContext context) {
+    final reserves = [..._presetsMb];
+    if (!reserves.contains(node.phoneReserveMb)) {
+      reserves.add(node.phoneReserveMb);
+      reserves.sort();
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Text('Keep free on this phone',
+              style: Theme.of(context).textTheme.bodyMedium),
+        ),
+        DropdownButton<int>(
+          value: node.phoneReserveMb,
+          underline: const SizedBox.shrink(),
+          items: reserves
+              .map((mb) => DropdownMenuItem(
+                  value: mb,
+                  child: Text(mb == DeviceProfile.defaultReserveMb
+                      ? '$mb MB (default)'
+                      : mb >= 1000
+                          ? '${(mb / 1000).toStringAsFixed(1)} GB'
+                          : '$mb MB')))
+              .toList(),
+          onChanged: (value) =>
+              value == null ? null : node.setPhoneReserveMb(value),
+        ),
+      ],
     );
   }
 }

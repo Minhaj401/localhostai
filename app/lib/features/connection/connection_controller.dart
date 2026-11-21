@@ -74,6 +74,19 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
   Map<String, dynamic>? cluster;
   Map<String, dynamic>? managed;
   DeviceProfile profile;
+
+  /// MiB this phone keeps free for Android and the app.
+  int get phoneReserveMb => DeviceProfile.configuredReserveMb;
+
+  /// Persist a new reserve and re-detect the profile. Heartbeats re-report
+  /// the profile, so a running share picks the change up within seconds.
+  Future<void> setPhoneReserveMb(int mb) async {
+    final clamped = mb.clamp(0, 65536);
+    DeviceProfile.configuredReserveMb = clamped;
+    await storage.setReserveMb(clamped);
+    profile = DeviceProfile.detect(name: profile.name, id: profile.id);
+    notifyListeners();
+  }
   String? error;
   String? operationMessage;
   String? operationError;
@@ -82,6 +95,20 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
   bool refreshing = false;
   bool operationBusy = false;
   bool sharingBusy = false;
+
+  /// Set while sharing when Android has not exempted the app from battery
+  /// optimization; the share page offers a tap-through exemption request.
+  bool batteryExemptionNeeded = false;
+
+  Future<void> requestBatteryExemption() async {
+    try {
+      await worker.requestBatteryOptimizationExemption();
+    } catch (_) {
+      /* The OEM may not ship the intent; the settings path still works. */
+    }
+    batteryExemptionNeeded = !await worker.batteryOptimizationIgnored();
+    notifyListeners();
+  }
   bool connected = false;
   String? activeOperationModel;
   String? selectedModel;
@@ -644,8 +671,14 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
           throw StateError('Pair the laptop before sharing this phone.');
         }
         await worker.startSharing(saved, profile);
+        batteryExemptionNeeded = !await worker.batteryOptimizationIgnored();
+        if (batteryExemptionNeeded) {
+          _record(
+              'Battery optimization is on: Android may stop sharing in the background. Exempt localhost.ai to keep the worker alive.');
+        }
       } else {
         await worker.stop();
+        batteryExemptionNeeded = false;
       }
       await refresh();
     } catch (failure) {

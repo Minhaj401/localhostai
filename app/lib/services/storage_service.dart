@@ -41,6 +41,10 @@ class StorageService {
     if (getString('device_id') == null) {
       await setString('device_id', DeviceProfile.createId());
     }
+    final reserve = getReserveMb();
+    if (reserve != null && reserve >= 0 && reserve <= 65536) {
+      DeviceProfile.configuredReserveMb = reserve;
+    }
   }
 
   String? getString(String key) => _secretKeys.contains(key)
@@ -87,13 +91,27 @@ class StorageService {
   }
 
   Future<void> setNodeUrl(String url) async {
-    final normalized = url.trim().replaceFirst(RegExp(r'/+$'), '');
+    final normalized = url.trim().replaceFirst(RegExp(r'/$'), '');
     final pair = loadPair();
     if (pair == null || pair.baseUrl != normalized) {
       await setString('pair_payload', '');
       await setString('pair_token', '');
     }
     await setString('laptop_node_url', normalized);
+  }
+
+  /// MiB this phone keeps free for Android and the app, overriding the 900
+  /// default. Null restores the default.
+  static const _reserveKey = 'phone_reserve_mb';
+
+  int? getReserveMb() => Hive.box(_settingsBox).get(_reserveKey) as int?;
+
+  Future<void> setReserveMb(int? mb) async {
+    if (mb == null) {
+      await Hive.box(_settingsBox).delete(_reserveKey);
+    } else {
+      await Hive.box(_settingsBox).put(_reserveKey, mb);
+    }
   }
 
   List<Map<String, dynamic>> loadMessages() {

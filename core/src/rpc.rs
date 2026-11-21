@@ -131,6 +131,34 @@ pub async fn probe(address: &str) -> WorkerStatus {
     }
 }
 
+/// TCP-level liveness for a worker that a running cluster already owns.
+/// A handshake probe would hang on the single-client worker while llama-server
+/// holds its connection, but the TCP result alone separates "worker process
+/// gone" from "busy or briefly unreachable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerLiveness {
+    /// Something is listening; the worker process is still alive.
+    Listening,
+    /// The connection was refused or unroutable; the worker cannot be serving.
+    Gone,
+    /// Timed out; a busy single-client worker looks like this too, so treat
+    /// it as inconclusive rather than a failure.
+    Unknown,
+}
+
+pub async fn peer_liveness(address: &str) -> PeerLiveness {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        TcpStream::connect(address),
+    )
+    .await
+    {
+        Ok(Ok(_)) => PeerLiveness::Listening,
+        Ok(Err(_)) => PeerLiveness::Gone,
+        Err(_) => PeerLiveness::Unknown,
+    }
+}
+
 #[cfg(test)]
 pub(crate) async fn serve_test_probe(mut socket: TcpStream) {
     let mut request = [0u8; 33];
@@ -187,6 +215,15 @@ mod tests {
         assert!(status.reachable);
         assert!(!status.compatible);
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn peer_liveness_distinguishes_a_live_listener_from_a_dead_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        assert_eq!(peer_liveness(&address).await, PeerLiveness::Listening);
+        drop(listener);
+        assert_eq!(peer_liveness(&address).await, PeerLiveness::Gone);
     }
 
     #[tokio::test]

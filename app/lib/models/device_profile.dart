@@ -14,6 +14,7 @@ class DeviceProfile {
   final int ramMb;
   final int availableMb;
   final int budgetMb;
+  final int reserveMb;
   final int cores;
   final int threads;
   final String arch;
@@ -25,6 +26,7 @@ class DeviceProfile {
     required this.ramMb,
     required this.availableMb,
     required this.budgetMb,
+    required this.reserveMb,
     required this.cores,
     required this.threads,
     required this.arch,
@@ -32,7 +34,12 @@ class DeviceProfile {
 
   /// Reserve for Android itself plus this app. Matches the laptop's rule for
   /// phones in `core/src/hardware.rs` so both sides agree on the budget.
-  static const int _phoneReserveMb = 900;
+  static const int defaultReserveMb = 900;
+
+  /// Reserve actually used (MiB kept free on this phone). Loaded from
+  /// settings at startup; the laptop sees changes on the next heartbeat
+  /// because every report carries the profile it was computed from.
+  static int configuredReserveMb = defaultReserveMb;
   static final String _sessionId = createId();
 
   static String createId() {
@@ -52,10 +59,10 @@ class DeviceProfile {
     return byRam < cores ? byRam : (cores < 1 ? 1 : cores);
   }
 
-  static int shareBudgetMb(int ramMb, int availableMb) {
-    final totalCapacity = ramMb > _phoneReserveMb ? ramMb - _phoneReserveMb : 0;
-    final freeCapacity =
-        availableMb > _phoneReserveMb ? availableMb - _phoneReserveMb : 0;
+  static int shareBudgetMb(int ramMb, int availableMb, [int? reserveOverride]) {
+    final reserve = reserveOverride ?? configuredReserveMb;
+    final totalCapacity = ramMb > reserve ? ramMb - reserve : 0;
+    final freeCapacity = availableMb > reserve ? availableMb - reserve : 0;
     return totalCapacity < freeCapacity ? totalCapacity : freeCapacity;
   }
 
@@ -106,11 +113,12 @@ class DeviceProfile {
   }
 
   /// Build the profile this device will report.
-  factory DeviceProfile.detect({required String name, String? id}) {
+  factory DeviceProfile.detect({required String name, String? id, int? reserveMb}) {
     final memory = readMemoryMb();
     final ram = memory.total;
     final cores = coreCount();
-    final budget = shareBudgetMb(ram, memory.available);
+    final reserve = reserveMb ?? configuredReserveMb;
+    final budget = shareBudgetMb(ram, memory.available, reserve);
     return DeviceProfile(
       id: id ?? _sessionId,
       name: name,
@@ -118,6 +126,7 @@ class DeviceProfile {
       ramMb: ram,
       availableMb: memory.available,
       budgetMb: budget,
+      reserveMb: reserve,
       cores: cores,
       threads: tierThreads(ram, cores),
       arch: archName(),
@@ -132,6 +141,8 @@ class DeviceProfile {
         'kind': kind,
         'ram_mb': ramMb,
         'available_mb': availableMb,
+        'budget_mb': budgetMb,
+        'reserve_mb': reserveMb,
         'cores': cores,
         'arch': arch,
         if (rpc != null && rpc.isNotEmpty) 'rpc': rpc,

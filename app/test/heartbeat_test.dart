@@ -18,6 +18,7 @@ DeviceProfile profile(int available) => DeviceProfile(
       ramMb: 8000,
       availableMb: available,
       budgetMb: available - 900,
+      reserveMb: 900,
       cores: 8,
       threads: 4,
       arch: 'arm64',

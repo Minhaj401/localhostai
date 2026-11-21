@@ -10,6 +10,8 @@ import android.os.BatteryManager
 import android.os.PowerManager
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -92,6 +94,24 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "stopWorkerProtection" -> WorkerKeepAliveService.stop(this) { result.success(null) }
+                    // OEM background limits kill workers mid-load; an explicit
+                    // exemption is the strongest keep-alive after the
+                    // foreground service.
+                    "batteryOptimizationIgnored" -> {
+                        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+                        result.success(power.isIgnoringBatteryOptimizations(packageName))
+                    }
+                    "requestIgnoreBatteryOptimization" -> {
+                        try {
+                            startActivity(Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName")
+                            ))
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error("battery_request_failed", error.message, null)
+                        }
+                    }
                     // LAN IP for showing the worker address.
                     "localIp" -> {
                         try {
