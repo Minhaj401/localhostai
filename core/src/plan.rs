@@ -228,7 +228,8 @@ pub fn plan_with_headroom(
             shortfall_mb: model.coordinator_mb.saturating_sub(coordinator_budget),
             summary: if model.max_context.is_some_and(|max| ctx > max) {
                 format!(
-                    "Context {ctx} exceeds this model's {}-token trained context.",
+                    "Context {ctx} exceeds this model's {}-token trained context; lower it to at most {} tokens.",
+                    model.max_context.unwrap(),
                     model.max_context.unwrap()
                 )
             } else {
@@ -311,10 +312,49 @@ pub fn plan_with_headroom(
 
     let covered = out.iter().filter(|a| a.layers > 0).count();
     let summary = if over {
+        // Actionable guidance: name the knob that moves this plan, with
+        // numbers, instead of leaving the user to guess.
+        let mut hints: Vec<String> = Vec::new();
+        // Suggest freeing roughly the shortfall, rounded up to a 128 MB step;
+        // skip the hint when the shortfall is absurd (corrupt metadata).
+        let free_mb = shortfall.div_ceil(128).saturating_mul(128);
+        let remote = pool
+            .iter()
+            .filter(|(_, rpc)| rpc.is_some())
+            .max_by_key(|(hardware, _)| hardware.budget_mb);
+        let local = pool.iter().find(|(_, rpc)| rpc.is_none());
+        if free_mb <= 1_048_576 {
+            if let Some((hardware, _)) = remote {
+                hints.push(format!(
+                    "free about {} MB on {} (lower its keep-free reserve)",
+                    free_mb, hardware.name
+                ));
+            } else if let Some((hardware, _)) = local {
+                hints.push(format!(
+                    "free about {} MB on {} (lower its reserve)",
+                    free_mb, hardware.name
+                ));
+            }
+        }
+        // A smaller context shrinks the KV cache; estimate the tokens to cut
+        // from the model's own per-token KV size.
+        if model.kv_bytes_per_token > 0 && ctx > 512 {
+            let kv_per_token_mb = model.kv_bytes_per_token as f64 / 1_048_576.0;
+            let tokens_to_cut = (shortfall as f64 / kv_per_token_mb).ceil() as u32;
+            let raw = ctx.saturating_sub(tokens_to_cut).max(512);
+            let suggested = raw / 512 * 512;
+            if suggested < ctx {
+                hints.push(format!("lower the context to about {suggested} tokens"));
+            }
+        }
+        let guidance = if hints.is_empty() {
+            "Lower the context or add a device.".to_string()
+        } else {
+            format!("Try: {}, or add a device.", hints.join(", or "))
+        };
         format!(
-            "Does not fit: {} of {} layers placed across {} device(s); {:.0} MB short. \
-             Lower the context or add a device.",
-            assigned, total_layers, covered, shortfall as f64
+            "Does not fit: {} of {} layers placed across {} device(s); {:.0} MB short. {}",
+            assigned, total_layers, covered, shortfall as f64, guidance
         )
     } else if covered > 1 {
         format!(
@@ -525,6 +565,56 @@ mod tests {
         assert_eq!(p.assignments[0].layers, 3);
         assert_eq!(p.assignments[0].memory_mb, 300);
         assert_eq!(p.shortfall_mb, 100);
+    }
+
+    #[test]
+    fn failure_summary_names_the_knobs_with_numbers() {
+        let big = ModelInfo {
+            name: "llama3:8b".into(),
+            path: "/y.gguf".into(),
+            params_b: Some(8.0),
+            size_mb: 8200,
+            layers: 32,
+            kv_bytes_per_token: 200_000,
+            ..Default::default()
+        };
+        // A phone is in the pool: the reserve hint names it.
+        let p = plan(
+            &big,
+            &[
+                (laptop(8000), None),
+                (phone(4000), Some("10.0.0.5:50052".into())),
+            ],
+            8192,
+        );
+        assert!(p.over_budget, "{}", p.summary);
+        assert!(p.summary.contains("free about"), "{}", p.summary);
+        assert!(p.summary.contains("Pixel"), "{}", p.summary);
+        assert!(
+            p.summary.contains("lower the context to about"),
+            "{}",
+            p.summary
+        );
+        assert!(p.summary.contains("add a device"), "{}", p.summary);
+
+        // Laptop only: the reserve hint points at the laptop instead.
+        let alone = plan(&big, &[(laptop(8000), None)], 4096);
+        assert!(alone.over_budget, "{}", alone.summary);
+        assert!(alone.summary.contains("on Laptop"), "{}", alone.summary);
+        assert!(!alone.summary.contains("Pixel"), "{}", alone.summary);
+
+        // Without KV metadata there is no context estimate to offer.
+        let no_kv = ModelInfo {
+            kv_bytes_per_token: 0,
+            ..big.clone()
+        };
+        let blind = plan(&no_kv, &[(laptop(8000), None)], 4096);
+        assert!(blind.over_budget, "{}", blind.summary);
+        assert!(
+            !blind.summary.contains("lower the context to about"),
+            "{}",
+            blind.summary
+        );
     }
 
     #[test]

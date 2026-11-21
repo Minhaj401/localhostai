@@ -459,13 +459,26 @@ class NodeClient {
     }
   }
 
-  Future<SplitPlan?> plan(String model, {int ctx = 4096}) async {
+  /// Preview a split. `[reserveMb]`/`[remoteHeadroomMb]` are optional what-if
+  /// memory overrides; the node plans with them without changing its real
+  /// tuning.
+  Future<SplitPlan?> plan(
+    String model, {
+    int ctx = 4096,
+    int? reserveMb,
+    int? remoteHeadroomMb,
+  }) async {
     try {
       final r = await _http
           .post(
             Uri.parse('$baseUrl/cluster/plan'),
             headers: _headers,
-            body: jsonEncode({'model': model, 'ctx': ctx}),
+            body: jsonEncode({
+              'model': model,
+              'ctx': ctx,
+              if (reserveMb != null) 'reserve_mb': reserveMb,
+              if (remoteHeadroomMb != null) 'remote_headroom_mb': remoteHeadroomMb,
+            }),
           )
           .timeout(const Duration(seconds: 15));
       if (r.statusCode != 200) return null;

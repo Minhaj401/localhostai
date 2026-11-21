@@ -106,6 +106,7 @@ pub enum Overlay {
     ModelPicker,
     ModelBrowser,
     Devices,
+    Memory,
     Pairing,
     Activity,
     Help,
@@ -118,6 +119,39 @@ pub struct Msg {
     pub role: String,
     pub content: String,
     pub tag: Option<String>,
+}
+
+/// Memory tuning as the node reports it, for the Memory overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryTuning {
+    /// Explicit laptop reserve; `None` when the kind-based default applies.
+    pub reserve_mb: Option<u64>,
+    pub remote_headroom_mb: u64,
+    pub effective_reserve_mb: u64,
+    pub total_mb: u64,
+    pub available_mb: u64,
+    pub budget_mb: u64,
+}
+
+impl MemoryTuning {
+    pub fn from_json(value: &Value) -> Option<Self> {
+        Some(Self {
+            reserve_mb: value["reserve_mb"].as_u64(),
+            remote_headroom_mb: value["remote_headroom_mb"].as_u64().unwrap_or(0),
+            effective_reserve_mb: value["effective_reserve_mb"].as_u64().unwrap_or(0),
+            total_mb: value["total_mb"].as_u64()?,
+            available_mb: value["available_mb"].as_u64().unwrap_or(0),
+            budget_mb: value["budget_mb"].as_u64().unwrap_or(0),
+        })
+    }
+
+    /// Budget the laptop would offer with `reserve` kept free — the same
+    /// `min(total, available) - reserve` rule the coordinator applies.
+    pub fn budget_for_reserve_mb(&self, reserve: u64) -> u64 {
+        let total_capacity = self.total_mb.saturating_sub(reserve);
+        let free_capacity = self.available_mb.saturating_sub(reserve);
+        total_capacity.min(free_capacity)
+    }
 }
 
 pub struct App {
@@ -179,6 +213,14 @@ pub struct App {
     pub activity_error: bool,
     pub operation_busy: bool,
     pub operation_id: u64,
+    /// Memory tuning for the Memory overlay; `None` until first loaded.
+    pub memory: Option<MemoryTuning>,
+    /// 0 = laptop reserve, 1 = remote headroom.
+    pub memory_focus: usize,
+    /// Draft values in MiB while editing; index follows `memory_focus`.
+    pub memory_draft: [u64; 2],
+    pub memory_dirty: bool,
+    pub memory_pending: bool,
 }
 
 impl App {
@@ -238,6 +280,52 @@ impl App {
             activity_error: false,
             operation_busy: false,
             operation_id: 0,
+            memory: None,
+            memory_focus: 0,
+            memory_draft: [0; 2],
+            memory_dirty: false,
+            memory_pending: false,
+        }
+    }
+
+    /// Open the Memory overlay and seed the drafts from the last known
+    /// tuning; the fresh values arrive via `UiEvent::Memory`.
+    pub fn open_memory(&mut self) {
+        self.overlay = Overlay::Memory;
+        self.memory_focus = 0;
+        if let Some(tuning) = self.memory {
+            self.memory_draft = [tuning.effective_reserve_mb, tuning.remote_headroom_mb];
+            self.memory_dirty = false;
+        }
+    }
+
+    /// Step the focused knob by `delta` MiB, clamped to its valid range.
+    /// Reserve 0 means "restore the kind-based default".
+    pub fn adjust_memory(&mut self, delta: i64) {
+        const RESERVE_MAX: u64 = 65_536;
+        const HEADROOM_MAX: u64 = 8_192;
+        let index = self.memory_focus.min(1);
+        let max = if index == 0 {
+            RESERVE_MAX
+        } else {
+            HEADROOM_MAX
+        };
+        let current = self.memory_draft[index];
+        let adjusted = if delta >= 0 {
+            current.saturating_add(delta as u64).min(max)
+        } else {
+            current.saturating_sub(delta.unsigned_abs())
+        };
+        self.memory_draft[index] = adjusted;
+        self.memory_dirty = true;
+    }
+
+    /// The save request the drafts describe. Reserve 0 clears the explicit
+    /// override so the kind-based default applies again.
+    pub fn memory_save_request(&self) -> Action {
+        crate::app::Action::SaveMemory {
+            reserve_mb: (self.memory_draft[0] != 0).then_some(self.memory_draft[0]),
+            remote_headroom_mb: self.memory_draft[1],
         }
     }
 
@@ -483,6 +571,24 @@ impl App {
                 self.overlay = Overlay::Pairing;
                 return Action::Pair;
             }
+            KeyCode::Char('m') if control && self.overlay == Overlay::None => {
+                self.open_memory();
+                return Action::LoadMemory;
+            }
+            KeyCode::Up if self.overlay == Overlay::Memory => {
+                self.memory_focus = self.memory_focus.saturating_sub(1);
+            }
+            KeyCode::Down if self.overlay == Overlay::Memory => {
+                self.memory_focus = (self.memory_focus + 1).min(1);
+            }
+            KeyCode::Left if self.overlay == Overlay::Memory => self.adjust_memory(-128),
+            KeyCode::Right if self.overlay == Overlay::Memory => self.adjust_memory(128),
+            KeyCode::Enter if self.overlay == Overlay::Memory => {
+                if self.memory_pending {
+                    return Action::None;
+                }
+                return self.memory_save_request();
+            }
             KeyCode::Up if self.overlay == Overlay::Devices => {
                 self.selected_device = self.selected_device.map(|index| index.saturating_sub(1));
             }
@@ -688,6 +794,11 @@ pub enum Action {
         id: String,
         enabled: bool,
     },
+    LoadMemory,
+    SaveMemory {
+        reserve_mb: Option<u64>,
+        remote_headroom_mb: u64,
+    },
     Start {
         model: String,
         ctx: u32,
@@ -717,6 +828,58 @@ mod tests {
         assert_eq!(
             app.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
             Action::Pair
+        );
+    }
+
+    #[test]
+    fn memory_overlay_selects_adjusts_and_saves() {
+        let mut app = App::new(String::new(), String::new());
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::CONTROL)),
+            Action::LoadMemory
+        );
+        assert_eq!(app.overlay, Overlay::Memory);
+
+        // Loading seeds the drafts from the reported tuning.
+        app.memory = Some(MemoryTuning {
+            reserve_mb: None,
+            remote_headroom_mb: 256,
+            effective_reserve_mb: 1400,
+            total_mb: 16_384,
+            available_mb: 9_000,
+            budget_mb: 14_984,
+        });
+        app.open_memory();
+        assert_eq!(app.memory_draft, [1400, 256]);
+
+        // ↑↓ moves between the two knobs; ←→ steps by 128 MiB.
+        app.adjust_memory(128);
+        assert_eq!(app.memory_draft, [1528, 256]);
+        app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        app.adjust_memory(128);
+        assert_eq!(app.memory_draft, [1528, 384]);
+        app.adjust_memory(-8192);
+        assert_eq!(app.memory_draft, [1528, 0], "headroom clamps at zero");
+        app.adjust_memory(i64::MIN);
+        assert_eq!(app.memory_draft, [1528, 0]);
+
+        // Enter saves: reserve 0 would mean "restore the kind default".
+        app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        app.memory_draft[0] = 0;
+        assert_eq!(
+            app.memory_save_request(),
+            Action::SaveMemory {
+                reserve_mb: None,
+                remote_headroom_mb: 0,
+            }
+        );
+        app.memory_draft[0] = 2048;
+        assert_eq!(
+            app.memory_save_request(),
+            Action::SaveMemory {
+                reserve_mb: Some(2048),
+                remote_headroom_mb: 0,
+            }
         );
     }
 

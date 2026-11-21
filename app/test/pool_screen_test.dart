@@ -221,4 +221,119 @@ void main() {
     expect(find.text('Phone reserve'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('what-if sliders preview a plan and apply the reserves',
+      (tester) async {
+    int? plannedCtx;
+    int? plannedReserve;
+    int? plannedHeadroom;
+    int? appliedReserve;
+    int? appliedHeadroom;
+    final node = NodeClient(
+      const PairPayload(
+          host: 'laptop', port: 8765, token: 'test', name: 'laptop'),
+      client: MockClient((request) async {
+        switch (request.url.path) {
+          case '/config/memory':
+            if (request.method == 'POST') {
+              final body = jsonDecode(request.body) as Map;
+              appliedReserve = body['reserve_mb'] as int?;
+              appliedHeadroom = body['remote_headroom_mb'] as int?;
+              return http.Response(
+                  jsonEncode({
+                    'reserve_mb': appliedReserve,
+                    'effective_reserve_mb': appliedReserve,
+                    'remote_headroom_mb': appliedHeadroom,
+                    'default_reserve_mb': 1400,
+                    'total_mb': 7720,
+                    'available_mb': 3000,
+                    'budget_mb': 7720 - (appliedReserve ?? 1400),
+                  }),
+                  200);
+            }
+            return http.Response(
+                jsonEncode({
+                  'reserve_mb': 1400,
+                  'effective_reserve_mb': 1400,
+                  'remote_headroom_mb': 256,
+                  'default_reserve_mb': 1400,
+                  'total_mb': 7720,
+                  'available_mb': 3000,
+                  'budget_mb': 6320,
+                }),
+                200);
+          case '/models':
+            return http.Response('{"models":[{"name":"model"}]}', 200);
+          case '/cluster/plan':
+            final body = jsonDecode(request.body) as Map;
+            plannedCtx = body['ctx'] as int;
+            plannedReserve = body['reserve_mb'] as int?;
+            plannedHeadroom = body['remote_headroom_mb'] as int?;
+            return http.Response(
+                jsonEncode({
+                  'plan': {
+                    'model': 'model',
+                    'ctx': plannedCtx,
+                    'total_layers': 24,
+                    'over_budget': false,
+                    'shortfall_mb': 0,
+                    'summary': 'Fits on Laptop alone.',
+                    'assignments': [
+                      {
+                        'device_name': 'Laptop',
+                        'layers': 24,
+                        'memory_mb': 500,
+                        'budget_mb': 1600,
+                      }
+                    ],
+                  }
+                }),
+                200);
+          default:
+            return http.Response('{"state":"stopped"}', 200);
+        }
+      }),
+    );
+    addTearDown(node.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: PoolScreen(
+        client: node,
+        profile: DeviceProfile.detect(name: 'phone'),
+        contextTokens: 4096,
+        phoneReserveMb: 900,
+        onPhoneReserveChanged: (mb) {},
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('What-if reserves — drag to preview, apply when it fits.'),
+        findsOneWidget);
+
+    // Sliders order: memory laptop, memory phone, context, what-if laptop,
+    // what-if headroom.
+    await tester.drag(find.byType(Slider).at(2), const Offset(400, 0));
+    await tester.pumpAndSettle();
+    expect(plannedCtx, isNotNull);
+    expect(plannedCtx, greaterThan(4096),
+        reason: 'raising context re-previews automatically');
+
+    await tester.drag(find.byType(Slider).at(3), const Offset(400, 0));
+    await tester.pumpAndSettle();
+    expect(plannedReserve, isNotNull);
+    expect(plannedReserve, greaterThan(1400),
+        reason: 'the what-if reserve rides along in the plan request');
+
+    // Loading is gated until the what-if reserves are applied.
+    final load = tester.widget<FilledButton>(find.ancestor(
+      of: find.text('Load model'),
+      matching: find.byType(FilledButton),
+    ));
+    expect(load.onPressed, isNull);
+
+    await tester.tap(find.text('Apply reserves'));
+    await tester.pumpAndSettle();
+    expect(appliedReserve, plannedReserve);
+    expect(appliedHeadroom, 256);
+    expect(find.textContaining('Reserves saved'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -466,6 +466,99 @@ pub fn model_browser(f: &mut Frame, browser: &crate::model_browser::ModelBrowser
 }
 
 /// Device pool: what each machine can contribute, and whether it really can.
+/// Memory reserves overlay: what the laptop keeps for itself and what every
+/// remote device keeps back for RPC buffers. ↑↓ select, ←→ adjust by 128 MB,
+/// Enter saves to the node (persisted to config.toml).
+pub fn memory_panel(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" memory reserves · ↑↓ select · ←→ adjust · Enter save · Esc close ")
+        .style(Style::default().bg(Color::Black));
+    let inner = block.inner(area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    f.render_widget(block, area);
+    let Some(tuning) = app.memory else {
+        f.render_widget(
+            Paragraph::new(" loading memory settings…").style(Style::default().fg(Color::DarkGray)),
+            inner,
+        );
+        return;
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    let reserve_draft = app.memory_draft[0];
+    let headroom_draft = app.memory_draft[1];
+    let knobs = [
+        (
+            0,
+            "Laptop reserve",
+            if reserve_draft == 0 {
+                "default".to_string()
+            } else {
+                format!("{reserve_draft} MB")
+            },
+            format!(
+                "laptop keeps {:.1} GB for itself · offers {:.1} GB to the pool",
+                if reserve_draft == 0 {
+                    tuning.effective_reserve_mb
+                } else {
+                    reserve_draft
+                } as f64
+                    / 1024.0,
+                tuning.budget_for_reserve_mb(if reserve_draft == 0 {
+                    tuning.effective_reserve_mb
+                } else {
+                    reserve_draft
+                }) as f64
+                    / 1024.0,
+            ),
+        ),
+        (
+            1,
+            "Remote headroom",
+            format!("{headroom_draft} MB"),
+            format!(
+                "every phone keeps back {headroom_draft} MB for RPC buffers before hosting layers"
+            ),
+        ),
+    ];
+    for (focus, label, value_label, detail) in knobs {
+        let selected = app.memory_focus == focus;
+        let cursor = if selected { "> " } else { "  " };
+        let style = if selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{cursor}{label}: {value_label}"),
+            style,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    {detail}"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::from(""));
+    let footer = if app.memory_pending {
+        " saving…".to_string()
+    } else if app.memory_dirty {
+        " Enter to save — applies to the next model load".to_string()
+    } else {
+        format!(
+            " Laptop total: {:.1} GB · pool budget now: {:.1} GB",
+            tuning.total_mb as f64 / 1024.0,
+            tuning.budget_mb as f64 / 1024.0,
+        )
+    };
+    lines.push(Line::from(Span::styled(
+        footer,
+        Style::default().fg(Color::Cyan),
+    )));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 pub fn devices_panel(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let allocated_mb: u64 = app
@@ -771,7 +864,7 @@ pub fn help_panel(f: &mut Frame, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from("  Enter send · ↑ models · Ctrl+D devices · Ctrl+P pair"),
+        Line::from("  Enter send · ↑ models · Ctrl+D devices · Ctrl+P pair · Ctrl+M memory"),
         Line::from("  Ctrl+A activity · Ctrl+X stop generation/model · Esc quit/close"),
         Line::from("  Ctrl+O saved chats · Ctrl+N new chat · Ctrl+G live performance"),
         Line::from("  Chats: type to search · Ctrl+R rename · Ctrl+E Markdown · Ctrl+Y JSON"),

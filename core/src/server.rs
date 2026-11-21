@@ -118,6 +118,14 @@ struct MemoryTuning {
     remote_headroom_mb: u64,
 }
 
+/// What-if memory inputs for a single plan request. `None` fields mean "use
+/// the node's current tuning"; they never change persistent state.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanOverrides {
+    pub reserve_mb: Option<u64>,
+    pub remote_headroom_mb: Option<u64>,
+}
+
 impl MemoryTuning {
     fn from_config(cfg: &Config) -> Self {
         Self {
@@ -205,17 +213,29 @@ impl NodeHandle {
 
     /// Plan a split for a model using this machine plus reporting peers.
     pub async fn plan_model(&self, name_or_path: &str, ctx: u32) -> Option<SplitPlan> {
+        self.plan_model_with_overrides(name_or_path, ctx, PlanOverrides::default())
+            .await
+    }
+
+    /// Plan with what-if memory overrides — the caller's hypothetical reserve
+    /// and headroom, without changing the node's real tuning.
+    pub async fn plan_model_with_overrides(
+        &self,
+        name_or_path: &str,
+        ctx: u32,
+        overrides: PlanOverrides,
+    ) -> Option<SplitPlan> {
         let models = self.inner.models.lock().await.clone();
         let m = models
             .iter()
             .find(|m| m.name == name_or_path || m.path == name_or_path)
             .cloned()
             .or_else(|| Managed::catalog_model(name_or_path).map(|model| model.model_info()))?;
-        Some(self.plan_with(&m, ctx).await)
+        Some(self.plan_with(&m, ctx, overrides).await)
     }
 
-    async fn plan_with(&self, m: &ModelInfo, ctx: u32) -> SplitPlan {
-        self.plan_with_detail(m, ctx).await.0
+    async fn plan_with(&self, m: &ModelInfo, ctx: u32, overrides: PlanOverrides) -> SplitPlan {
+        self.plan_with_detail(m, ctx, overrides).await.0
     }
 
     /// Plan, also returning the devices that were excluded and why — so the UI
@@ -225,6 +245,7 @@ impl NodeHandle {
         &self,
         m: &ModelInfo,
         ctx: u32,
+        overrides: PlanOverrides,
     ) -> (SplitPlan, Vec<(String, String)>) {
         let mut devices: Vec<(Hardware, Option<String>)> = Vec::new();
         let mut excluded = Vec::new();
@@ -233,6 +254,9 @@ impl NodeHandle {
 
         if self.inner.self_enabled.load(Ordering::Relaxed) {
             let mut hardware = current_self_hardware(&self.inner);
+            if let Some(reserve) = overrides.reserve_mb {
+                hardware.set_reserve_override(Some(reserve));
+            }
             let releasable = active
                 .server_pid
                 .map(crate::hardware::process_releasable_mb);
@@ -243,6 +267,9 @@ impl NodeHandle {
             // when all transformer blocks are remote. Exclusion controls layer
             // placement, not the unavoidable coordinator process.
             let mut hardware = current_self_hardware(&self.inner);
+            if let Some(reserve) = overrides.reserve_mb {
+                hardware.set_reserve_override(Some(reserve));
+            }
             let releasable = active
                 .server_pid
                 .map(crate::hardware::process_releasable_mb);
@@ -279,9 +306,12 @@ impl NodeHandle {
                 ));
             }
         }
-        // Remote headroom is persisted as a user choice; applying it to the
-        // placement budget lands with the planner's headroom parameter.
-        let mut plan = plan::plan(m, &devices, ctx);
+        // The what-if headroom, or the node's current tuning when previewing
+        // with the status quo.
+        let headroom = overrides
+            .remote_headroom_mb
+            .unwrap_or(self.inner.memory_tuning().remote_headroom_mb);
+        let mut plan = plan::plan_with_headroom(m, &devices, ctx, headroom);
         for assignment in &mut plan.assignments {
             assignment.worker_session = sessions.remove(&assignment.device_id);
         }
@@ -1923,7 +1953,9 @@ async fn dispatch(
         }
         handle.add_model(model.clone()).await;
 
-        let plan = handle.plan_with(&model, ctx).await;
+        let plan = handle
+            .plan_with(&model, ctx, PlanOverrides::default())
+            .await;
         if !plan.fits() {
             let b = json!({ "error": "split does not fit", "plan": plan });
             return respond_cors(
@@ -1983,10 +2015,46 @@ async fn dispatch(
                 .await
             }
         };
+        // Optional what-if memory overrides; absent fields plan with the
+        // node's current tuning.
+        let mut overrides = PlanOverrides::default();
+        if let Some(field) = req.get("reserve_mb") {
+            match field.as_u64() {
+                Some(reserve) if reserve <= 65_536 => overrides.reserve_mb = Some(reserve),
+                _ => {
+                    return respond_cors(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        b"{\"error\":\"reserve_mb must be a whole number of at most 65536 MiB\"}",
+                    )
+                    .await
+                }
+            }
+        }
+        if let Some(field) = req.get("remote_headroom_mb") {
+            match field.as_u64() {
+                Some(headroom) if headroom <= 8192 => {
+                    overrides.remote_headroom_mb = Some(headroom)
+                }
+                _ => {
+                    return respond_cors(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        b"{\"error\":\"remote_headroom_mb must be a whole number of at most 8192 MiB\"}",
+                    )
+                    .await
+                }
+            }
+        }
         let handle = NodeHandle {
             inner: inner.clone(),
         };
-        match handle.plan_model(&want, ctx).await {
+        match handle
+            .plan_model_with_overrides(&want, ctx, overrides)
+            .await
+        {
             Some(p) => {
                 let b = json!({ "plan": p });
                 return respond_cors(
@@ -2892,6 +2960,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plan_previews_what_if_memory_without_changing_tuning() {
+        let node = TestNode::new().await;
+        let api = crate::api::Node::with_token(&node.url, Some("MixedCaseToken".into()));
+        let model = "qwen2.5-0.5b-instruct-q4_k_m";
+
+        // A reserve larger than the machine leaves no budget: the preview
+        // must reflect the hypothetical, not the saved tuning.
+        let preview = api
+            .post_json(
+                "/cluster/plan",
+                &json!({"model": model, "ctx": 4096, "reserve_mb": 65_536}),
+            )
+            .await
+            .unwrap()["plan"]
+            .clone();
+        assert_eq!(preview["over_budget"], true);
+        assert!(preview["assignments"].as_array().unwrap().is_empty());
+
+        // Out-of-range preview values are rejected.
+        let client = reqwest::Client::new();
+        for invalid in [
+            json!({"model": model, "ctx": 4096, "reserve_mb": 65_537}),
+            json!({"model": model, "ctx": 4096, "remote_headroom_mb": 8_193}),
+        ] {
+            assert_eq!(
+                client
+                    .post(format!("{}/cluster/plan", node.url))
+                    .bearer_auth("MixedCaseToken")
+                    .json(&invalid)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                400,
+                "{invalid}"
+            );
+        }
+
+        // The preview never mutates the node's real tuning.
+        let tuning = api.get_json("/config/memory").await.unwrap();
+        assert_eq!(tuning["reserve_mb"], Value::Null);
+        assert_eq!(tuning["remote_headroom_mb"], 256);
+
+        // Planning without overrides fits the small catalog model at a small
+        // context on the test laptop's 2400 MB.
+        let normal = api
+            .post_json("/cluster/plan", &json!({"model": model, "ctx": 512}))
+            .await
+            .unwrap()["plan"]
+            .clone();
+        assert_eq!(normal["over_budget"], false, "plan: {normal}");
+    }
+
+    #[tokio::test]
     async fn remote_model_download_controls_always_require_the_pair_token() {
         let node = TestNode::with_pairing(false).await;
         let client = reqwest::Client::new();
@@ -3216,7 +3338,9 @@ mod tests {
         let handle = NodeHandle {
             inner: node.inner.clone(),
         };
-        let plan = handle.plan_with(&model, 4096).await;
+        let plan = handle
+            .plan_with(&model, 4096, PlanOverrides::default())
+            .await;
         assert!(plan.fits(), "{}", plan.summary);
         assert!(plan
             .assignments
@@ -3302,7 +3426,9 @@ mod tests {
         assert_eq!(phone["available_mb"], 1234);
         assert_eq!(phone["cores"], 6);
         assert!(phone["heartbeat_seconds"].as_u64().unwrap() <= 1);
-        let plan = handle.plan_with(&model, 4096).await;
+        let plan = handle
+            .plan_with(&model, 4096, PlanOverrides::default())
+            .await;
         assert!(
             !plan.fits(),
             "disabled phone must not contribute: {}",
@@ -3340,7 +3466,9 @@ mod tests {
             .unwrap()
             .error_for_status()
             .unwrap();
-        let plan = handle.plan_with(&model, 4096).await;
+        let plan = handle
+            .plan_with(&model, 4096, PlanOverrides::default())
+            .await;
         assert!(
             plan.fits(),
             "phone can host this test model: {}",

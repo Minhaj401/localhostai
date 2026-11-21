@@ -47,6 +47,10 @@ class _PoolScreenState extends State<PoolScreen> {
   int? _laptopReserveDraft;
   int? _phoneReserveDraft;
   bool _savingMemory = false;
+  int? _whatIfReserve;
+  int? _whatIfHeadroom;
+  bool _whatIfDirty = false;
+  bool _applyingReserves = false;
 
   /// Slider bounds and step, in MiB. Wide enough for small phones and
   /// big-desktop reserves, coarse enough to be meaningful.
@@ -113,6 +117,10 @@ class _PoolScreenState extends State<PoolScreen> {
       }
       _cluster = cluster;
       _memory = memory;
+      if (memory != null && memory.totalMb > 0 && !_whatIfDirty) {
+        _whatIfReserve = memory.reserveMb ?? memory.effectiveReserveMb;
+        _whatIfHeadroom = memory.remoteHeadroomMb;
+      }
       _connectionError = false;
       _busy = false;
       _initialLoading = false;
@@ -134,7 +142,12 @@ class _PoolScreenState extends State<PoolScreen> {
       _notice = null;
       _noticeError = false;
     });
-    final plan = await widget.client.plan(model, ctx: _contextTokens);
+    final plan = await widget.client.plan(
+      model,
+      ctx: _contextTokens,
+      reserveMb: _whatIfReserve,
+      remoteHeadroomMb: _whatIfHeadroom,
+    );
     if (!mounted) return;
     setState(() {
       _plan = plan;
@@ -204,6 +217,72 @@ class _PoolScreenState extends State<PoolScreen> {
         _noticeError = true;
         _notice =
             'The laptop did not accept the new reserve. Check the connection and try again.';
+      }
+    });
+    if (updated != null) await _refresh();
+  }
+
+  /// A labeled slider row shared by the context picker and the what-if
+  /// memory previews. The value commits on drag end so a preview runs once
+  /// per gesture, not per pixel.
+  Widget _whatIfSlider(
+    BuildContext context, {
+    required String label,
+    required String valueLabel,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required bool enabled,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    final theme = Theme.of(context);
+    final clamped = value.clamp(min, max);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(label, style: theme.textTheme.labelLarge)),
+            Text(valueLabel, style: mono(13, color: C.accent, w: FontWeight.w600)),
+          ],
+        ),
+        Slider(
+          value: clamped,
+          min: min,
+          max: max,
+          divisions: divisions,
+          label: valueLabel,
+          onChanged: enabled ? onChanged : null,
+          onChangeEnd: enabled ? onChangeEnd : null,
+        ),
+      ],
+    );
+  }
+
+  /// Persist the what-if reserves as the laptop's real tuning. The next
+  /// model load plans with them.
+  Future<void> _applyReserves() async {
+    setState(() => _applyingReserves = true);
+    final updated = await widget.client.setMemoryConfig(
+      reserveMb: _whatIfReserve,
+      remoteHeadroomMb: _whatIfHeadroom,
+    );
+    if (!mounted) return;
+    setState(() {
+      _applyingReserves = false;
+      if (updated != null) {
+        _memory = updated;
+        _whatIfReserve = updated.reserveMb ?? updated.effectiveReserveMb;
+        _whatIfHeadroom = updated.remoteHeadroomMb;
+        _whatIfDirty = false;
+        _notice = 'Reserves saved. The next model load plans with them.';
+        _noticeError = false;
+      } else {
+        _noticeError = true;
+        _notice =
+            'The laptop did not accept the new reserves. Check the connection and try again.';
       }
     });
     if (updated != null) await _refresh();
@@ -518,27 +597,57 @@ class _PoolScreenState extends State<PoolScreen> {
                                   ),
                                 if (_models.isNotEmpty) ...[
                                   const SizedBox(height: 12),
-                                  DropdownButtonFormField<int>(
-                                    value: _contextTokens,
-                                    elevation: 0,
-                                    dropdownColor: C.surface2,
-                                    borderRadius: BorderRadius.circular(R.md),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Context size',
-                                    ),
-                                    items: const [1024, 2048, 4096, 8192, 16384]
-                                        .map((value) => DropdownMenuItem(
-                                              value: value,
-                                              child: Text('$value tokens'),
-                                            ))
-                                        .toList(),
-                                    onChanged: _busy
-                                        ? null
-                                        : (value) => setState(() {
-                                              _contextTokens = value!;
-                                              _plan = null;
-                                            }),
+                                  _whatIfSlider(
+                                    context,
+                                    label: 'Context size',
+                                    valueLabel: '$_contextTokens tokens',
+                                    value: _contextTokens.toDouble(),
+                                    min: 512,
+                                    max: 32768,
+                                    divisions: (32768 - 512) ~/ 512,
+                                    enabled: !_busy,
+                                    onChanged: (value) =>
+                                        setState(() => _contextTokens = value.round()),
+                                    onChangeEnd: (_) => _planSplit(),
                                   ),
+                                  if (_whatIfReserve != null && _whatIfHeadroom != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'What-if reserves — drag to preview, apply when it fits.',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                    _whatIfSlider(
+                                      context,
+                                      label: 'Laptop reserve',
+                                      valueLabel:
+                                          '${(_whatIfReserve! / 1024).toStringAsFixed(1)} GB',
+                                      value: _whatIfReserve!.toDouble(),
+                                      min: 256,
+                                      max: 8192,
+                                      divisions: (8192 - 256) ~/ 128,
+                                      enabled: !_busy,
+                                      onChanged: (value) => setState(() {
+                                        _whatIfReserve = value.round();
+                                        _whatIfDirty = true;
+                                      }),
+                                      onChangeEnd: (_) => _planSplit(),
+                                    ),
+                                    _whatIfSlider(
+                                      context,
+                                      label: 'Remote headroom',
+                                      valueLabel: '$_whatIfHeadroom MB',
+                                      value: _whatIfHeadroom!.toDouble(),
+                                      min: 0,
+                                      max: 8192,
+                                      divisions: 8192 ~/ 128,
+                                      enabled: !_busy,
+                                      onChanged: (value) => setState(() {
+                                        _whatIfHeadroom = value.round();
+                                        _whatIfDirty = true;
+                                      }),
+                                      onChangeEnd: (_) => _planSplit(),
+                                    ),
+                                  ],
                                 ],
                                 const SizedBox(height: 14),
                                 ResponsiveActions(
@@ -549,14 +658,30 @@ class _PoolScreenState extends State<PoolScreen> {
                                           : _planSplit,
                                       child: const Text('Preview split'),
                                     ),
+                                    if (_whatIfDirty)
+                                      OutlinedButton(
+                                        onPressed:
+                                            _busy || _applyingReserves ? null : _applyReserves,
+                                        child: const Text('Apply reserves'),
+                                      ),
                                     FilledButton(
-                                      onPressed: _busy || _plan?.fits != true
+                                      onPressed: _busy ||
+                                              _plan?.fits != true ||
+                                              _whatIfDirty
                                           ? null
                                           : _startDistributed,
                                       child: const Text('Load model'),
                                     ),
                                   ],
                                 ),
+                                if (_whatIfDirty && _plan?.fits == true)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 8),
+                                    child: Text(
+                                      'The preview uses your what-if reserves. Apply them to load with this split.',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                  ),
                                 if (running) ...[
                                   const SizedBox(height: 10),
                                   TextButton(

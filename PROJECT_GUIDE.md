@@ -327,6 +327,22 @@ Inside the `Ctrl+D` panel:
 | `Space` | Include or exclude the selected device from future split plans. |
 | `Esc` | Close the panel. |
 
+### Memory reserves panel
+
+Inside the `Ctrl+M` panel:
+
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Switch between the laptop reserve and the remote headroom. |
+| `Left` / `Right` | Adjust the selected knob by 128 MiB. Laptop reserve 0 restores the kind-based default. |
+| `Enter` | Save to the node (persisted to `config.toml`; applies to the next model load). |
+| `Esc` | Close the panel. |
+
+The same knobs are available from the app's pool screen, where the what-if
+sliders preview a split with hypothetical reserves before applying them
+(`POST /cluster/plan` accepts optional `reserve_mb` and `remote_headroom_mb`
+overrides that never change saved state).
+
 The panel shows:
 
 - Total RAM.
@@ -810,7 +826,7 @@ and CORS headers are not emitted.
 | GET | `/config/memory` | Memory tuning: laptop reserve, remote headroom, and the resulting budget. |
 | POST | `/config/memory` | Change `reserve_mb` (or `null` for the kind default) and `remote_headroom_mb`; persists to `config.toml`. |
 | GET | `/cluster` | Cluster state, toolchain, peers, logs, and assignments. |
-| POST | `/cluster/plan` | Produce a split plan. |
+| POST | `/cluster/plan` | Produce a split plan; optional `reserve_mb` / `remote_headroom_mb` preview what-if memory without changing saved tuning. |
 | POST | `/cluster/start` | Plan and start a registered GGUF. |
 | POST | `/cluster/stop` | Stop the active cluster. |
 | OPTIONS | any path | Native-client capability response; browser origins are rejected. |

@@ -37,6 +37,7 @@ enum UiEvent {
     Status(Box<Snapshot>),
     Pair(Result<String>),
     DeviceToggle(Result<String>),
+    Memory(Result<serde_json::Value>),
     Browse {
         request_id: u64,
         result: Result<localhostai_core::model_hub::HubResults>,
@@ -550,6 +551,10 @@ async fn event_loop(
                     );
                     ui::devices_panel(f, &app, area);
                 }
+                Overlay::Memory => {
+                    let area = ui::centered_rect(78, 12, f.area());
+                    ui::memory_panel(f, &app, area);
+                }
                 Overlay::Pairing => {
                     let h = (app.qr_lines.len() + 8).min(u16::MAX as usize) as u16;
                     let w = app
@@ -667,6 +672,34 @@ async fn event_loop(
                 if !refreshing {
                     request_snapshot(&node, &tx);
                     refreshing = true;
+                }
+            }
+            UiEvent::Memory(result) => {
+                app.memory_pending = false;
+                match result {
+                    Ok(value) => match crate::app::MemoryTuning::from_json(&value) {
+                        Some(tuning) => {
+                            let saving = app.memory_dirty || app.overlay == Overlay::Memory;
+                            app.memory = Some(tuning);
+                            app.memory_draft =
+                                [tuning.effective_reserve_mb, tuning.remote_headroom_mb];
+                            app.memory_dirty = false;
+                            if saving {
+                                app.notice = Some(format!(
+                                    "Memory reserves saved: the laptop keeps {:.1} GB for itself, remote devices keep back {} MB.",
+                                    tuning.effective_reserve_mb as f64 / 1024.0,
+                                    tuning.remote_headroom_mb
+                                ));
+                            }
+                        }
+                        None => {
+                            app.notice =
+                                Some("The node returned unreadable memory settings.".into());
+                        }
+                    },
+                    Err(error) => {
+                        app.notice = Some(format!("Could not update memory reserves: {error:#}"));
+                    }
                 }
             }
             UiEvent::Preview {
@@ -907,6 +940,34 @@ async fn event_loop(
                                     }
                                 });
                             let _ = tx.send(UiEvent::DeviceToggle(result));
+                        });
+                    }
+                    Action::LoadMemory => {
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node.get_json("/config/memory").await;
+                            let _ = tx.send(UiEvent::Memory(result));
+                        });
+                    }
+                    Action::SaveMemory {
+                        reserve_mb,
+                        remote_headroom_mb,
+                    } => {
+                        app.memory_pending = true;
+                        let node = node.clone();
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let result = node
+                                .post_json(
+                                    "/config/memory",
+                                    &json!({
+                                        "reserve_mb": reserve_mb,
+                                        "remote_headroom_mb": remote_headroom_mb,
+                                    }),
+                                )
+                                .await;
+                            let _ = tx.send(UiEvent::Memory(result));
                         });
                     }
                     Action::Start { model, ctx } => {
