@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/Minhaj401/localhostai/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/checks-Rust%20%2B%20Flutter-5CF26A" alt="Rust and Flutter checks"></a>
-  <a href="https://github.com/Minhaj401/localhostai/releases"><img src="https://img.shields.io/badge/release-v0.3.1-5CF26A" alt="Release v0.3.1"></a>
+  <a href="https://github.com/Minhaj401/localhostai/releases"><img src="https://img.shields.io/badge/release-v0.3.2-5CF26A" alt="Release v0.3.2"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5CF26A" alt="MIT license"></a>
   <a href="Cargo.toml"><img src="https://img.shields.io/badge/coordinator-Rust-DEA584" alt="Rust coordinator"></a>
   <a href="app"><img src="https://img.shields.io/badge/app-Flutter-54C5F8" alt="Flutter app"></a>
