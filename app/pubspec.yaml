@@ -1,7 +1,7 @@
 name: localhostai
 description: localhost.ai — Run AI Locally. Private chat and LAN inference.
 publish_to: "none"
-version: 0.3.2+11
+version: 0.3.3+12
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
