@@ -201,7 +201,7 @@ void main() {
     final server = WorkspaceServer()..add('one', 'Shared');
     final storage = MemoryStorage();
     final chat = Get.put(ChatController(storage,
-        backendFactory: (_) => LaptopNodeBackend(
+        backendFactory: () => LaptopNodeBackend(
             baseUrl: WorkspaceServer.pair.baseUrl,
             token: 'secret',
             client: server.httpClient)));
@@ -234,7 +234,7 @@ void main() {
         ..add('one',
             'A long conversation title with 日本語 and notes to continue on the phone');
       final chat = Get.put(ChatController(MemoryStorage(),
-          backendFactory: (_) => FakeBackend()));
+          backendFactory: () => FakeBackend()));
       chat.shared.attach(server.client());
       await chat.shared.refresh();
       Widget host(Widget child) => MaterialApp(

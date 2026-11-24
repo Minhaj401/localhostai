@@ -31,13 +31,7 @@ class LaptopNodeBackend extends LlmBackend {
   Map<String, dynamic>? _health;
 
   @override
-  String get id => 'laptop';
-
-  @override
   String get displayName => 'Laptop node';
-
-  @override
-  bool get isReady => _health?['ok'] == true;
 
   Future<Map<String, dynamic>?> health() async {
     try {
@@ -75,9 +69,6 @@ class LaptopNodeBackend extends LlmBackend {
 
   @override
   Future<String?> currentModel() async => _model;
-
-  @override
-  Future<void> setModel(String? model) async => _model = model;
 
   @override
   Stream<StreamChunk> chat(

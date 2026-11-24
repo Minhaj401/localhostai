@@ -15,12 +15,9 @@ class StreamChunk {
 /// Common interface every inference backend implements.
 /// The chat UI never knows (or cares) where tokens come from.
 abstract class LlmBackend {
-  String get id; // 'laptop' | 'cloud' | 'local'
   String get displayName;
-  bool get isReady;
   Future<void> ensureReady();
   Future<String?> currentModel();
-  Future<void> setModel(String? model);
 
   /// Streams an assistant reply for [messages]. Yields deltas.
   Stream<StreamChunk> chat(

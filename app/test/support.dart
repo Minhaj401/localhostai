@@ -36,21 +36,14 @@ class MemoryStorage extends StorageService {
 
 class FakeBackend extends LlmBackend {
   FakeBackend(
-      {this.ready,
-      this.reply = 'reply',
-      this.id = 'cloud',
-      this.failAfterReply = false});
+      {this.ready, this.reply = 'reply', this.failAfterReply = false});
   final Future<void>? ready;
   final String reply;
   bool disposed = false;
   final bool failAfterReply;
   List<ChatMessage> received = const [];
   @override
-  final String id;
-  @override
-  String get displayName => id;
-  @override
-  bool get isReady => true;
+  String get displayName => 'fake';
   @override
   Future<void> ensureReady() async {
     await ready;
@@ -58,8 +51,6 @@ class FakeBackend extends LlmBackend {
 
   @override
   Future<String?> currentModel() async => 'test';
-  @override
-  Future<void> setModel(String? model) async {}
   @override
   Stream<StreamChunk> chat(List<ChatMessage> messages,
       {String? systemPrompt}) async* {

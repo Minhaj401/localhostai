@@ -13,12 +13,12 @@ import '../services/conversation_library.dart';
 /// localhost.ai runs on your own hardware: the paired laptop is the only
 /// inference backend.
 class ChatController extends GetxController {
-  ChatController(this._storage, {LlmBackend Function(String)? backendFactory})
+  ChatController(this._storage, {LlmBackend Function()? backendFactory})
       : _backendFactory = backendFactory,
         shared = ConversationLibrary(_storage);
 
   final StorageService _storage;
-  final LlmBackend Function(String)? _backendFactory;
+  final LlmBackend Function()? _backendFactory;
   int _generation = 0;
   final ConversationLibrary shared;
   String? _sharedId;
@@ -27,31 +27,17 @@ class ChatController extends GetxController {
 
   final messages = <ChatMessage>[].obs;
   final isGenerating = false.obs;
-  final activeBackendId = 'laptop'.obs;
   final error = RxnString(null);
   final streamingText = ''.obs;
 
   LlmBackend? _backend;
 
-  LlmBackend get backend {
-    // Always read the observable, even when cached, so an Obx that uses this
-    // getter stays subscribed after its first build.
-    final id = activeBackendId.value;
-    return _backend ??= _backendFactory?.call(id) ?? _buildBackend(id);
-  }
+  LlmBackend get backend => _backend ??= _backendFactory?.call() ?? _buildBackend();
 
   @override
   void onInit() {
     super.onInit();
     shared.addListener(_sharedChanged);
-    final saved = _storage.getString('active_backend');
-    // Older builds could save cloud/anthropic/local backends; the laptop is
-    // the only backend now, so ignore any other saved value.
-    if (saved == 'laptop') {
-      activeBackendId.value = 'laptop';
-    } else if (saved != null) {
-      _storage.setString('active_backend', 'laptop');
-    }
     for (final raw in _storage.loadMessages()) {
       try {
         messages.add(ChatMessage.fromJson(raw));
@@ -61,7 +47,7 @@ class ChatController extends GetxController {
     }
   }
 
-  LlmBackend _buildBackend(String id) {
+  LlmBackend _buildBackend() {
     // Prefer the paired node: the scanned QR carries host, port and token.
     final pair = _storage.loadPair();
     if (pair != null) {
@@ -74,7 +60,7 @@ class ChatController extends GetxController {
     );
   }
 
-  /// Disposes and rebuilds the backend for the current [activeBackendId].
+  /// Disposes the current backend so the next access rebuilds it from settings.
   Future<void> rebuildBackend() async {
     _generation++;
     isGenerating.value = false;
@@ -90,7 +76,6 @@ class ChatController extends GetxController {
   ///   2. web: the node that served this page, then host:8765, then loopback
   ///   3. native: LAN discovery (UDP broadcast + subnet scan)
   Future<void> autoDiscoverNode() async {
-    if (activeBackendId.value != 'laptop') return;
     if (_storage.loadPair() != null) return;
     final generation = _generation;
     final saved = _storage.getString('laptop_node_url');
@@ -129,42 +114,22 @@ class ChatController extends GetxController {
       }
     }
 
-    if (url != null &&
-        generation == _generation &&
-        !isClosed &&
-        activeBackendId.value == 'laptop') {
+    if (url != null && generation == _generation && !isClosed) {
       await _storage.selectNode(url);
       await rebuildBackend();
     }
   }
 
-  Future<void> switchBackend(String id) async {
-    if (id == activeBackendId.value) return;
-    activeBackendId.value = id;
-    final saved = _storage.setString('active_backend', id);
-    await rebuildBackend();
-    await saved;
-    error.value = null;
-    if (id == 'laptop' && shared.ready) {
-      _sharedRevision = -1;
-      _sharedChanged();
-    } else {
-      messages.assignAll(_storage.loadMessages().map(ChatMessage.fromJson));
-    }
-  }
-
   Future<void> send(String text) async {
     if (text.trim().isEmpty || isGenerating.value) return;
-    if (activeBackendId.value == 'laptop' && backend is LaptopNodeBackend) {
+    if (backend is LaptopNodeBackend) {
       await _sendShared(text.trim());
       return;
     }
     final content = text.trim();
     final context =
         int.tryParse(_storage.getString('context_tokens') ?? '') ?? 4096;
-    final maximum = activeBackendId.value == 'laptop'
-        ? (context * 3 ~/ 2).clamp(1024, 1024 * 1024)
-        : 1024 * 1024;
+    final maximum = (context * 3 ~/ 2).clamp(1024, 1024 * 1024);
     if (content.length > maximum) {
       error.value =
           'This message is too large for the selected context. Shorten it or choose a larger context.';
@@ -221,7 +186,7 @@ class ChatController extends GetxController {
   }
 
   Future<void> clearChat() async {
-    if (activeBackendId.value == 'laptop' && shared.ready) {
+    if (shared.ready) {
       await stopGeneration();
       await shared.create();
       await shared.refresh();
@@ -235,7 +200,7 @@ class ChatController extends GetxController {
   }
 
   Future<void> stopGeneration() async {
-    if (activeBackendId.value == 'laptop' && shared.ready) {
+    if (shared.ready) {
       await rebuildBackend();
       try {
         await shared.cancel();
@@ -262,7 +227,6 @@ class ChatController extends GetxController {
   }
 
   List<ChatMessage> _boundedMessages() {
-    if (activeBackendId.value != 'laptop') return messages.toList();
     final context =
         int.tryParse(_storage.getString('context_tokens') ?? '') ?? 4096;
     // Three UTF-16 characters/token is deliberately conservative for mixed
@@ -295,10 +259,7 @@ class ChatController extends GetxController {
       _storage.saveMessages(messages.map((m) => m.toJson()).toList());
 
   void _sharedChanged() {
-    if (isClosed ||
-        isGenerating.value ||
-        activeBackendId.value != 'laptop' ||
-        !shared.ready) return;
+    if (isClosed || isGenerating.value || !shared.ready) return;
     final chat = shared.current;
     if (chat?.id == _sharedId && (chat?.revision ?? -1) == _sharedRevision) {
       return;

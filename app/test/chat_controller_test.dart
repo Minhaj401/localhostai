@@ -9,7 +9,7 @@ import 'package:localhostai/features/connection/connection_controller.dart';
 import 'package:localhostai/models/pairing.dart';
 import 'package:localhostai/services/phone_worker_service.dart';
 import 'package:localhostai/services/storage_service.dart';
-import 'package:localhostai/ui/settings_screen.dart';
+import 'package:localhostai/features/settings/settings_page.dart';
 
 import 'app_fixture.dart';
 import 'support.dart';
@@ -23,16 +23,15 @@ void main() {
     Get.reset();
   });
 
-  test('restores conversation and migrates an old backend choice to laptop', () {
+  test('restores conversation and ignores a stale backend choice', () {
     final storage = MemoryStorage()
       ..settings['active_backend'] = 'anthropic'
       ..history = [
         {'role': 'user', 'content': 'Remember this'}
       ];
     final controller = Get.put(
-        ChatController(storage, backendFactory: (id) => FakeBackend(id: id)));
-    expect(controller.activeBackendId.value, 'laptop');
-    expect(storage.getString('active_backend'), 'laptop');
+        ChatController(storage, backendFactory: () => FakeBackend()));
+    expect(controller.backend, isA<FakeBackend>());
     expect(controller.messages.single.content, 'Remember this');
   });
 
@@ -42,7 +41,7 @@ void main() {
     final old = FakeBackend(ready: ready.future);
     final storage = MemoryStorage();
     final controller =
-        Get.put(ChatController(storage, backendFactory: (_) => old));
+        Get.put(ChatController(storage, backendFactory: () => old));
     final sending = controller.send('old prompt');
     await Future<void>.delayed(Duration.zero);
     await controller.clearChat();
@@ -59,7 +58,7 @@ void main() {
     final secondReady = Completer<void>();
     var builds = 0;
     final controller = Get.put(ChatController(MemoryStorage(),
-        backendFactory: (_) => ++builds == 1
+        backendFactory: () => ++builds == 1
             ? FakeBackend(ready: firstReady.future)
             : FakeBackend(ready: secondReady.future, reply: 'new reply')));
     final first = controller.send('first');
@@ -78,7 +77,7 @@ void main() {
     final backend = FakeBackend(reply: 'partial answer', failAfterReply: true);
     final storage = MemoryStorage();
     final controller =
-        Get.put(ChatController(storage, backendFactory: (_) => backend));
+        Get.put(ChatController(storage, backendFactory: () => backend));
     await controller.send('question');
     expect(controller.messages.last.content, 'partial answer');
     expect(controller.messages.last.interrupted, isTrue);
@@ -88,7 +87,7 @@ void main() {
 
   test('laptop history is conservatively bounded by selected context',
       () async {
-    final backend = FakeBackend(id: 'laptop');
+    final backend = FakeBackend();
     final storage = MemoryStorage()
       ..settings['active_backend'] = 'laptop'
       ..settings['context_tokens'] = '1024'
@@ -99,7 +98,7 @@ void main() {
                 'content': 'x' * 600
               });
     final controller =
-        Get.put(ChatController(storage, backendFactory: (_) => backend));
+        Get.put(ChatController(storage, backendFactory: () => backend));
     await controller.send('latest');
     expect(backend.received.last.content, 'latest');
     expect(
@@ -113,7 +112,7 @@ void main() {
       ..settings['active_backend'] = 'laptop'
       ..settings['context_tokens'] = '1024';
     final controller = Get.put(ChatController(storage,
-        backendFactory: (_) => FakeBackend(id: 'laptop')));
+        backendFactory: () => FakeBackend()));
     await controller.send('x' * 2000);
     expect(controller.messages, isEmpty);
     expect(controller.error.value, contains('too large'));
@@ -135,14 +134,14 @@ void main() {
     Get.put<StorageService>(storage);
     final worker = Get.put(PhoneWorkerService());
     final controller = Get.put(
-        ChatController(storage, backendFactory: (id) => FakeBackend(id: id)));
+        ChatController(storage, backendFactory: () => FakeBackend()));
     final old = controller.backend as FakeBackend;
     await tester.pumpWidget(ProviderScope(
       overrides: [
         storageProvider.overrideWithValue(storage),
         phoneWorkerProvider.overrideWithValue(worker),
       ],
-      child: const GetMaterialApp(home: SettingsScreen()),
+      child: GetMaterialApp(home: SettingsScreen(onReplaySetup: () {})),
     ));
     final field = find
         .byWidgetPredicate((w) =>
@@ -165,14 +164,14 @@ void main() {
     Get.put<StorageService>(storage);
     Get.put<PhoneWorkerService>(fixture.worker);
     Get.put(
-        ChatController(storage, backendFactory: (id) => FakeBackend(id: id)));
+        ChatController(storage, backendFactory: () => FakeBackend()));
     await tester.pumpWidget(ProviderScope(
       overrides: [
         storageProvider.overrideWithValue(storage),
         phoneWorkerProvider.overrideWithValue(fixture.worker),
         connectionProvider.overrideWith((ref) => node),
       ],
-      child: const GetMaterialApp(home: SettingsScreen()),
+      child: GetMaterialApp(home: SettingsScreen(onReplaySetup: () {})),
     ));
     await tester.pumpAndSettle();
     expect(find.text('http://10.0.0.1:8765'), findsWidgets);

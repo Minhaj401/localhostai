@@ -67,7 +67,7 @@ void main() {
       Get.put<StorageService>(fixture.storage);
       Get.put<PhoneWorkerService>(fixture.worker);
       Get.put(ChatController(fixture.storage,
-          backendFactory: (id) => FakeBackend(id: id)));
+          backendFactory: () => FakeBackend()));
       final handle = tester.ensureSemantics();
       final previewKey = GlobalKey();
       try {
@@ -118,7 +118,7 @@ void main() {
     Get.put<StorageService>(fixture.storage);
     Get.put<PhoneWorkerService>(fixture.worker);
     Get.put(ChatController(fixture.storage,
-        backendFactory: (id) => FakeBackend(id: id)));
+        backendFactory: () => FakeBackend()));
     await tester.pumpWidget(ProviderScope(
         overrides: [
           storageProvider.overrideWithValue(fixture.storage),

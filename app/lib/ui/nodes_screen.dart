@@ -73,10 +73,6 @@ class _NodesScreenState extends State<NodesScreen> {
     final current =
         storage.getString('laptop_node_url')?.replaceFirst(RegExp(r'/+$'), '');
     if (current == normalized) {
-      final chat = Get.find<ChatController>();
-      if (chat.activeBackendId.value != 'laptop') {
-        await chat.switchBackend('laptop');
-      }
       if (mounted) Navigator.of(context).pop();
       return;
     }
@@ -84,12 +80,7 @@ class _NodesScreenState extends State<NodesScreen> {
     if (worker.sharing.value) await worker.stop();
     await storage.selectNode(uri.toString());
 
-    final chat = Get.find<ChatController>();
-    if (chat.activeBackendId.value == 'laptop') {
-      await chat.rebuildBackend();
-    } else {
-      await chat.switchBackend('laptop');
-    }
+    await Get.find<ChatController>().rebuildBackend();
     if (mounted) {
       Navigator.of(context).pop();
     }
