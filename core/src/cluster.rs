@@ -460,7 +460,12 @@ impl Cluster {
         let client = reqwest::Client::new();
         let started = tokio::time::Instant::now();
         let absolute_deadline = started + std::time::Duration::from_secs(900);
-        let mut progress_deadline = started + std::time::Duration::from_secs(180);
+        // llama-server prints nothing while it streams tensors to RPC peers,
+        // so a healthy phone upload looks like silence in the log. The liveness
+        // check below fails fast when a worker actually dies, so with live RPC
+        // peers we tolerate a longer quiet window before calling the load stuck.
+        let quiet_window: u64 = if rpc_addresses.is_empty() { 180 } else { 600 };
+        let mut progress_deadline = started + std::time::Duration::from_secs(quiet_window);
         // The preflight probe passed seconds ago; re-check peer liveness
         // periodically so a worker killed mid-load fails fast instead of
         // burning the whole progress deadline.
@@ -483,8 +488,10 @@ impl Cluster {
             if !rpc_addresses.is_empty() && tokio::time::Instant::now() >= next_peer_check {
                 next_peer_check = tokio::time::Instant::now() + self.peer_check_interval;
                 let mut gone = Vec::new();
+                let mut all_listening = !rpc_addresses.is_empty();
                 for address in &rpc_addresses {
                     if crate::rpc::peer_liveness(address).await == crate::rpc::PeerLiveness::Gone {
+                        all_listening = false;
                         gone.push(address.clone());
                     }
                 }
@@ -498,6 +505,14 @@ impl Cluster {
                             ),
                         )
                         .await;
+                }
+                if all_listening {
+                    // Peers are alive and the load is simply quiet (RPC tensor
+                    // upload prints nothing); give it more time instead of
+                    // killing a working transfer.
+                    progress_deadline = (tokio::time::Instant::now()
+                        + std::time::Duration::from_secs(quiet_window))
+                    .min(absolute_deadline);
                 }
             }
             if tokio::time::Instant::now() >= progress_deadline
@@ -524,7 +539,7 @@ impl Cluster {
                     .fail(
                         generation,
                         format!(
-                            "llama-server made no loading progress for 180s or exceeded the 15-minute startup limit{detail}"
+                            "llama-server made no loading progress for {quiet_window}s or exceeded the 15-minute startup limit{detail}"
                         ),
                     )
                     .await;
@@ -1211,6 +1226,82 @@ mod tests {
         let error = status.error.unwrap();
         assert!(error.contains("stopped listening during model load"));
         assert!(error.contains("battery optimization"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_but_silent_rpc_peer_survives_the_quiet_window() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let server = dir.path().join("server");
+        // The fake server prints nothing and never becomes healthy. With a
+        // live RPC peer the quiet window is 600s, so a startup attempt must
+        // still be Starting well past the 180s laptop-only window would have
+        // fired (measured here in wall-clock seconds of test time).
+        std::fs::write(&server, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let model_path = dir.path().join("model.gguf");
+        std::fs::write(&model_path, crate::gguf::fixture(1)).unwrap();
+
+        // The worker answers every liveness probe and keeps listening,
+        // simulating a phone that is alive but still receiving tensors.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let _ = crate::rpc::serve_test_probe(socket).await;
+                });
+            }
+        });
+
+        let mut cluster = Cluster::new();
+        cluster.override_tools = Some(Toolchain {
+            llama_server: server.clone(),
+            rpc_server: server,
+        });
+        cluster.log_dir = dir.path().join("logs");
+        cluster.peer_check_interval = std::time::Duration::from_millis(300);
+        let model = ModelInfo {
+            name: "test".into(),
+            path: model_path.display().to_string(),
+            params_b: None,
+            size_mb: 1,
+            layers: 1,
+            kv_bytes_per_token: 0,
+            ..Default::default()
+        };
+        let phone = Hardware {
+            id: "phone".into(),
+            name: "phone".into(),
+            kind: "phone".into(),
+            budget_mb: 512,
+            can_host_layers: true,
+            ..Default::default()
+        };
+        let plan = crate::plan::plan(&model, &[(phone, Some(rpc))], 4096);
+
+        let task = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cluster.start(&plan, &model_path, 4096),
+        );
+        // Give the monitor several peer-check cycles; a live peer must keep
+        // the startup alive instead of failing with the quiet-window error.
+        for _ in 0..6 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            let status = cluster.status().await;
+            assert_ne!(
+                status.state,
+                ClusterState::Failed,
+                "a live but silent RPC peer must not fail startup: {:?}",
+                status.error
+            );
+            if status.state == ClusterState::Running {
+                break;
+            }
+        }
+        task.await.ok();
     }
 
     #[tokio::test]
