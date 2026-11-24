@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -98,8 +99,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _newChat() async {
-    if (controller.activeBackendId.value == 'laptop' &&
-        controller.shared.ready) {
+    if (controller.shared.ready) {
       await controller.clearChat();
       return;
     }
@@ -148,8 +148,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 animation: controller.shared,
                 builder: (context, _) {
                   final chat = controller.shared.current;
-                  if (chat == null ||
-                      controller.activeBackendId.value != 'laptop') {
+                  if (chat == null) {
                     return const SizedBox.shrink();
                   }
                   return AdaptiveContent(
@@ -265,34 +264,36 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   subtitle:
                       'A quiet place to think, ask, and build with your own models.'),
               const SizedBox(height: 24),
-              Obx(() => controller.activeBackendId.value == 'laptop'
-                  ? TerminalWindow(
-                      title: node.ready
-                          ? 'model ready'
-                          : 'connect your coordinator',
-                      child: Text(
-                        node.ready
-                            ? '${node.runningModel ?? node.info?.models.firstOrNull ?? 'Model ready'}\n\n>_ type a message below'
-                            : '>_ localhostai --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
-                        style: mono(13, color: C.text),
-                      ))
-                  : const NoticeBanner(
-                      message:
-                          'This conversation uses an external provider configured in Settings.')),
-              const SizedBox(height: 24),
-              if (!node.ready && controller.activeBackendId.value == 'laptop')
-                SizedBox(
-                    width: double.infinity,
-                    child: PrimaryButton(
-                      label: node.client == null
-                          ? 'Connect laptop'
-                          : 'Choose a model',
-                      icon: node.client == null
-                          ? LucideIcons.link
-                          : LucideIcons.box,
-                      onPressed: () => context
-                          .go(node.client == null ? '/server' : '/models'),
-                    )),
+              AnimatedBuilder(
+                  animation: node,
+                  builder: (context, _) => Column(children: [
+                        TerminalWindow(
+                            title: node.ready
+                                ? 'model ready'
+                                : 'connect your coordinator',
+                            child: Text(
+                              node.ready
+                                  ? '${node.runningModel ?? node.info?.models.firstOrNull ?? 'Model ready'}\n\n>_ type a message below'
+                                  : '>_ localhostai --require-pairing\n\nChoose a model on the laptop.\nPress Ctrl+P to pair this phone.',
+                              style: mono(13, color: C.text),
+                            )),
+                        if (!node.ready)
+                          SizedBox(
+                              width: double.infinity,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 24),
+                                child: PrimaryButton(
+                                  label: node.client == null
+                                      ? 'Connect laptop'
+                                      : 'Choose a model',
+                                  icon: node.client == null
+                                      ? LucideIcons.link
+                                      : LucideIcons.box,
+                                  onPressed: () => context.go(
+                                      node.client == null ? '/server' : '/models'),
+                                ),
+                              )),
+                      ])),
             ])),
       ]));
 
@@ -304,25 +305,54 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Obx(() {
-                final laptop = controller.activeBackendId.value == 'laptop';
-                final label = laptop
-                    ? node.runningModel ??
+              AnimatedBuilder(
+                  animation: node,
+                  builder: (context, _) {
+                    final label = node.runningModel ??
                         node.info?.models.firstOrNull ??
-                        'No model loaded'
-                    : controller.backend.displayName;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: InkWell(
-                    onTap: () => context.go(laptop ? '/models' : '/settings'),
-                    borderRadius: BorderRadius.circular(R.pill),
-                    child: StatusPill(label,
-                        tone: laptop && node.ready
-                            ? StatusTone.positive
-                            : StatusTone.neutral),
-                  ),
-                );
-              }),
+                        'No model loaded';
+                    final endpoint = node.endpoint.isEmpty
+                        ? null
+                        : '${node.endpoint.replaceFirst(RegExp(r'/+$'), '')}/v1';
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            InkWell(
+                              onTap: () => context.go('/models'),
+                              borderRadius: BorderRadius.circular(R.pill),
+                              child: StatusPill(label,
+                                  tone: node.ready
+                                      ? StatusTone.positive
+                                      : StatusTone.neutral),
+                            ),
+                            if (endpoint != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: InkWell(
+                                  onTap: () => Clipboard.setData(
+                                      ClipboardData(text: endpoint)),
+                                  borderRadius: BorderRadius.circular(R.pill),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 2),
+                                    child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(endpoint,
+                                              style:
+                                                  mono(11, color: C.text3)),
+                                          const SizedBox(width: 4),
+                                          const Icon(LucideIcons.copy,
+                                              size: 11, color: C.text3),
+                                        ]),
+                                  ),
+                                ),
+                              ),
+                          ]),
+                    );
+                  }),
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(

@@ -24,6 +24,14 @@ class MemoryStorage extends StorageService {
   Future<void> clearMessages() async {
     history = [];
   }
+
+  int? reserveMb;
+  @override
+  int? getReserveMb() => reserveMb;
+  @override
+  Future<void> setReserveMb(int? mb) async {
+    reserveMb = mb;
+  }
 }
 
 class FakeBackend extends LlmBackend {

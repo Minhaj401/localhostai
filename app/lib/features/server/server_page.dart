@@ -192,12 +192,6 @@ class ServerPage extends ConsumerWidget {
                                     icon:
                                         const Icon(LucideIcons.wifi, size: 16),
                                     label: const Text('Nearby laptops')),
-                                if (node.client != null)
-                                  TextButton.icon(
-                                      onPressed: () => context.push('/devices'),
-                                      icon:
-                                          const Icon(LucideIcons.cpu, size: 16),
-                                      label: const Text('Compute pool')),
                                 if (node.client != null && !running)
                                   TextButton.icon(
                                       onPressed: node.operationBusy

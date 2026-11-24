@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:localhostai/models/chat_message.dart';
 import 'package:localhostai/models/pairing.dart';
-import 'package:localhostai/services/cloud_service.dart';
 import 'package:localhostai/services/laptop_node_service.dart';
 import 'package:localhostai/services/llm_backend.dart';
 import 'package:localhostai/services/node_client.dart';
@@ -38,13 +37,6 @@ void main() {
             utf8.encode('data: {"error":{"message":"model crashed"}}\n\n')),
         200);
     await expectLater(parseOpenAiStream(response).toList(), throwsStateError);
-    final backend = AnthropicBackend(
-        apiKey: 'test',
-        client: MockClient((_) async => http.Response(
-            'data: {"type":"error","error":{"message":"overloaded"}}\n\n',
-            200)));
-    await expectLater(backend.chat([]).toList(), throwsStateError);
-    await backend.dispose();
   });
 
   test('laptop requests authenticate and follow a changed active model',

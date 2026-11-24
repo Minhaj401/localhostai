@@ -3,17 +3,15 @@ import 'dart:math';
 import 'package:get/get.dart';
 
 import '../models/chat_message.dart';
-import '../services/cloud_service.dart';
 import '../services/llm_backend.dart';
 import '../services/laptop_node_service.dart';
-import '../services/local_inference_stub.dart';
 import '../services/node_discovery.dart';
 import '../services/storage_service.dart';
 import '../services/conversation_library.dart';
 
-/// Builds the active backend from stored settings and owns chat state.
-/// Mirrors localhost.ai's controller layer, with 'laptop' added as a first-class
-/// backend alongside 'cloud' and 'local'.
+/// Owns chat state and builds the laptop backend from stored settings.
+/// localhost.ai runs on your own hardware: the paired laptop is the only
+/// inference backend.
 class ChatController extends GetxController {
   ChatController(this._storage, {LlmBackend Function(String)? backendFactory})
       : _backendFactory = backendFactory,
@@ -47,8 +45,12 @@ class ChatController extends GetxController {
     super.onInit();
     shared.addListener(_sharedChanged);
     final saved = _storage.getString('active_backend');
-    if (['laptop', 'cloud', 'anthropic', 'local'].contains(saved)) {
-      activeBackendId.value = saved!;
+    // Older builds could save cloud/anthropic/local backends; the laptop is
+    // the only backend now, so ignore any other saved value.
+    if (saved == 'laptop') {
+      activeBackendId.value = 'laptop';
+    } else if (saved != null) {
+      _storage.setString('active_backend', 'laptop');
     }
     for (final raw in _storage.loadMessages()) {
       try {
@@ -60,35 +62,16 @@ class ChatController extends GetxController {
   }
 
   LlmBackend _buildBackend(String id) {
-    switch (id) {
-      case 'laptop':
-        // Prefer the paired node: the scanned QR carries host, port and token.
-        final pair = _storage.loadPair();
-        if (pair != null) {
-          return LaptopNodeBackend(baseUrl: pair.baseUrl, token: pair.token);
-        }
-        final url = _storage.getString('laptop_node_url') ?? '';
-        return LaptopNodeBackend(
-          baseUrl: url,
-          token: _storage.getString('pair_token'),
-        );
-      case 'local':
-        return LocalInferenceBackend();
-      case 'anthropic':
-        return AnthropicBackend(
-          apiKey: _storage.getString('anthropic_key') ?? '',
-        );
-      case 'cloud':
-      default:
-        return OpenAiCompatibleBackend(
-          id: 'cloud',
-          displayName: 'OpenAI-compatible',
-          baseUrl: _storage.getString('cloud_base_url') ??
-              'https://api.openai.com/v1',
-          apiKey: _storage.getString('cloud_key') ?? '',
-          defaultModel: _storage.getString('cloud_model'),
-        );
+    // Prefer the paired node: the scanned QR carries host, port and token.
+    final pair = _storage.loadPair();
+    if (pair != null) {
+      return LaptopNodeBackend(baseUrl: pair.baseUrl, token: pair.token);
     }
+    final url = _storage.getString('laptop_node_url') ?? '';
+    return LaptopNodeBackend(
+      baseUrl: url,
+      token: _storage.getString('pair_token'),
+    );
   }
 
   /// Disposes and rebuilds the backend for the current [activeBackendId].

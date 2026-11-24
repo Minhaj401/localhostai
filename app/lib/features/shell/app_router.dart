@@ -7,7 +7,6 @@ import 'package:lucide_icons/lucide_icons.dart';
 import '../../theme/tokens.dart';
 import '../../ui/nodes_screen.dart';
 import '../../ui/pair_screen.dart';
-import '../../ui/pool_screen.dart';
 import '../../widgets/brand.dart';
 import '../chat/chat_page.dart';
 import '../connection/connection_controller.dart';
@@ -80,22 +79,6 @@ final routerProvider = Provider<GoRouter>((ref) {
                 onSelected: (url) =>
                     ref.read(connectionProvider).connectAddress(url),
               ))),
-      GoRoute(
-          path: '/devices',
-          pageBuilder: (context, state) =>
-              _page(state, Consumer(builder: (context, ref, _) {
-                final node = ref.watch(connectionProvider);
-                return node.client == null
-                    ? const ServerPage()
-                    : PoolScreen(
-                        client: node.client!,
-                        profile: node.profile,
-                        contextTokens: node.contextTokens,
-                        phoneReserveMb: node.phoneReserveMb,
-                        onPhoneReserveChanged: (mb) =>
-                            ref.read(connectionProvider).setPhoneReserveMb(mb),
-                      );
-              }))),
     ],
   );
   ref.onDispose(router.dispose);

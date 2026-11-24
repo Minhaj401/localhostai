@@ -23,7 +23,7 @@ void main() {
     Get.reset();
   });
 
-  test('restores conversation and the last selected backend', () {
+  test('restores conversation and migrates an old backend choice to laptop', () {
     final storage = MemoryStorage()
       ..settings['active_backend'] = 'anthropic'
       ..history = [
@@ -31,7 +31,8 @@ void main() {
       ];
     final controller = Get.put(
         ChatController(storage, backendFactory: (id) => FakeBackend(id: id)));
-    expect(controller.activeBackendId.value, 'anthropic');
+    expect(controller.activeBackendId.value, 'laptop');
+    expect(storage.getString('active_backend'), 'laptop');
     expect(controller.messages.single.content, 'Remember this');
   });
 
@@ -128,9 +129,9 @@ void main() {
     expect(storage.getString('laptop_node_url'), 'http://10.0.0.2:8765');
   });
 
-  testWidgets('settings persist while typing and invalidate the cached backend',
+  testWidgets('applying a node URL persists it and rebuilds the backend',
       (tester) async {
-    final storage = MemoryStorage()..settings['active_backend'] = 'cloud';
+    final storage = MemoryStorage()..settings['active_backend'] = 'laptop';
     Get.put<StorageService>(storage);
     final worker = Get.put(PhoneWorkerService());
     final controller = Get.put(
@@ -144,13 +145,14 @@ void main() {
       child: const GetMaterialApp(home: SettingsScreen()),
     ));
     final field = find
-        .byWidgetPredicate(
-            (w) => w is TextField && w.decoration?.labelText == 'API key')
+        .byWidgetPredicate((w) =>
+            w is TextField && w.decoration?.labelText == 'Advanced node URL')
         .first;
     await tester.ensureVisible(field);
-    await tester.enterText(field, 'updated-key');
-    await tester.pump();
-    expect(storage.getString('cloud_key'), 'updated-key');
+    await tester.enterText(field, 'http://10.0.0.9:8765');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(storage.getString('laptop_node_url'), 'http://10.0.0.9:8765');
     expect(old.disposed, isTrue);
     expect(identical(controller.backend, old), isFalse);
   });

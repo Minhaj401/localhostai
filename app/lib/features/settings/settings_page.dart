@@ -13,6 +13,7 @@ import '../../widgets/app_card.dart';
 import '../../widgets/brand.dart';
 import '../../widgets/common.dart';
 import '../connection/connection_controller.dart';
+import 'memory_settings.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key, this.onNodeChanged, this.onReplaySetup});
@@ -38,53 +39,18 @@ class SettingsScreen extends ConsumerWidget {
                   const SectionHeader('Make it yours',
                       eyebrow: 'Settings',
                       subtitle:
-                          'Choose a backend and how your assistant responds.'),
+                          'Your laptop runs the models. Tune memory and behavior here.'),
                   const SizedBox(height: 24),
-                  Text('Inference backend',
-                      style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  AppCard(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 4),
-                      child: Obx(() => Column(children: [
-                            _backend(
-                                chat,
-                                'laptop',
-                                'Laptop over LAN',
-                                'Run on the paired coordinator.',
-                                LucideIcons.laptop),
-                            const Divider(),
-                            _backend(
-                                chat,
-                                'cloud',
-                                'OpenAI-compatible',
-                                'Use your configured external provider.',
-                                LucideIcons.cloud),
-                            const Divider(),
-                            _backend(
-                                chat,
-                                'anthropic',
-                                'Anthropic',
-                                'Use the Claude Messages API.',
-                                LucideIcons.sparkles),
-                            const Divider(),
-                            RadioListTile<String>(
-                                value: 'local',
-                                groupValue: chat.activeBackendId.value,
-                                onChanged: null,
-                                title: const Text('On-device'),
-                                subtitle: const Text(
-                                    'Standalone inference is not available yet.'),
-                                secondary: const Icon(LucideIcons.smartphone,
-                                    color: C.text3)),
-                          ]))),
+                  _LaptopSettings(
+                      key: ValueKey(
+                          '${connection.pair?.baseUrl}-${connection.info?.pairing == true}'),
+                      chat: chat,
+                      storage: storage,
+                      pair: connection.pair,
+                      pairingRequired: connection.info?.pairing == true,
+                      onNodeChanged: onNodeChanged),
                   const SizedBox(height: 24),
-                  Obx(() => _configuration(
-                      chat,
-                      storage,
-                      chat.activeBackendId.value,
-                      connection.pair,
-                      connection.info?.pairing == true)),
+                  const MemorySettings(),
                   const SizedBox(height: 24),
                   Text('Assistant behavior',
                       style: Theme.of(context).textTheme.titleLarge),
@@ -98,10 +64,6 @@ class SettingsScreen extends ConsumerWidget {
                     onChanged: (value) =>
                         storage.setString('system_prompt', value),
                   )),
-                  const SizedBox(height: 24),
-                  const NoticeBanner(
-                      message:
-                          'History and settings stay on this phone. Cloud backends send the current conversation to their provider.'),
                   const SizedBox(height: 24),
                   AppCard(
                       child: Column(
@@ -120,78 +82,6 @@ class SettingsScreen extends ConsumerWidget {
             ],
           )),
     );
-  }
-
-  Widget _backend(ChatController chat, String id, String title,
-          String description, IconData icon) =>
-      RadioListTile<String>(
-        value: id,
-        groupValue: chat.activeBackendId.value,
-        onChanged: (value) {
-          if (value != null) chat.switchBackend(value);
-        },
-        secondary: Icon(icon, color: C.text2, size: 20),
-        title: Text(title),
-        subtitle: Text(description),
-      );
-
-  Widget _configuration(ChatController chat, StorageService storage,
-      String backend, PairPayload? pair, bool pairingRequired) {
-    Future<void> save(String key, String value) async {
-      await storage.setString(key, value);
-      await chat.rebuildBackend();
-    }
-
-    if (backend == 'laptop') {
-      return _LaptopSettings(
-          key: ValueKey('${pair?.baseUrl}-$pairingRequired'),
-          chat: chat,
-          storage: storage,
-          pair: pair,
-          pairingRequired: pairingRequired,
-          onNodeChanged: onNodeChanged);
-    }
-    if (backend == 'local') {
-      return const NoticeBanner(
-          message:
-              'Pair a laptop to run models. Standalone phone inference is not implemented.',
-          tone: StatusTone.warning);
-    }
-    final cloud = backend == 'cloud';
-    return AppCard(
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text(cloud ? 'Provider configuration' : 'Anthropic configuration',
-          style: mono(12, color: C.text, w: FontWeight.w500)),
-      const SizedBox(height: 16),
-      if (cloud) ...[
-        _SettingField(
-            label: 'Base URL',
-            hint: 'https://api.openai.com/v1',
-            initial: storage.getString('cloud_base_url') ?? '',
-            keyboardType: TextInputType.url,
-            onChanged: (value) => save('cloud_base_url', value)),
-        const SizedBox(height: 12),
-      ],
-      _SettingField(
-          label: 'API key',
-          hint: cloud ? 'sk-...' : 'sk-ant-...',
-          initial:
-              storage.getString(cloud ? 'cloud_key' : 'anthropic_key') ?? '',
-          obscure: true,
-          onChanged: (value) =>
-              save(cloud ? 'cloud_key' : 'anthropic_key', value)),
-      if (cloud) ...[
-        const SizedBox(height: 12),
-        _SettingField(
-            label: 'Default model',
-            hint: 'gpt-4o-mini',
-            initial: storage.getString('cloud_model') ?? '',
-            onChanged: (value) => save('cloud_model', value)),
-      ],
-      const SizedBox(height: 12),
-      Text('Saved in local app storage as you type.', style: mono(12)),
-    ]));
   }
 }
 
@@ -313,7 +203,6 @@ class _SettingField extends StatefulWidget {
       required this.initial,
       this.onChanged,
       this.onSubmitted,
-      this.obscure = false,
       this.maxLines = 1,
       this.keyboardType,
       this.helperText,
@@ -323,7 +212,6 @@ class _SettingField extends StatefulWidget {
   final String initial;
   final Future<void> Function(String)? onChanged;
   final Future<void> Function(String)? onSubmitted;
-  final bool obscure;
   final int maxLines;
   final TextInputType? keyboardType;
   final String? helperText;
@@ -335,7 +223,6 @@ class _SettingField extends StatefulWidget {
 class _SettingFieldState extends State<_SettingField> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.initial);
-  late bool _obscure = widget.obscure;
 
   @override
   void didUpdateWidget(_SettingField oldWidget) {
@@ -358,29 +245,19 @@ class _SettingFieldState extends State<_SettingField> {
   @override
   Widget build(BuildContext context) => TextField(
         controller: _controller,
-        obscureText: _obscure,
-        maxLines: widget.obscure ? 1 : widget.maxLines,
+        maxLines: widget.maxLines,
         keyboardType: widget.keyboardType,
-        autocorrect:
-            !widget.obscure && widget.keyboardType != TextInputType.url,
-        enableSuggestions:
-            !widget.obscure && widget.keyboardType != TextInputType.url,
+        autocorrect: widget.keyboardType != TextInputType.url,
+        enableSuggestions: widget.keyboardType != TextInputType.url,
         textInputAction: widget.maxLines > 1
             ? TextInputAction.newline
             : TextInputAction.done,
         decoration: InputDecoration(
-            labelText: widget.label,
-            hintText: widget.hint,
-            helperText: widget.helperText,
-            errorText: widget.errorText,
-            suffixIcon: widget.obscure
-                ? IconButton(
-                    tooltip: _obscure ? 'Show value' : 'Hide value',
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(_obscure ? LucideIcons.eye : LucideIcons.eyeOff,
-                        size: 18),
-                  )
-                : null),
+          labelText: widget.label,
+          hintText: widget.hint,
+          helperText: widget.helperText,
+          errorText: widget.errorText,
+        ),
         onChanged: widget.onChanged,
         onSubmitted: widget.onSubmitted,
       );

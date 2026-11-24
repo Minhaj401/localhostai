@@ -12,9 +12,7 @@ class StorageService {
   static const _chatBox = 'chat';
   static const _secretKeys = {
     'pair_payload',
-    'pair_token',
-    'cloud_key',
-    'anthropic_key'
+    'pair_token'
   };
   final FlutterSecureStorage _secure = const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
