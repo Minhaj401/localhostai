@@ -45,9 +45,6 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
     });
     if (polling) {
-      _liveTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (_active && _client != null && !checking) unawaited(refreshLive());
-      });
       _timer = Timer.periodic(const Duration(seconds: 4), (_) {
         if (_active && _client != null && !checking) unawaited(refresh());
       });
@@ -58,13 +55,6 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
   final PhoneWorkerService worker;
   final NodeClient Function(PairPayload) _clientFactory;
   Timer? _timer;
-  Timer? _liveTimer;
-  bool _liveRefreshing = false;
-  Map<String, dynamic>? performance;
-  double? latencyMs;
-  String? performanceError;
-  bool get benchmarking =>
-      (performance?['benchmark'] as Map?)?['state'] == 'running';
   Worker? _workerWatch;
   NodeClient? _client;
   PairPayload? pair;
@@ -246,8 +236,6 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
       models = const [];
       cluster = null;
       managed = null;
-      performance = null;
-      latencyMs = null;
       _record('connected to ${client.baseUrl}');
       if (changed && Get.isRegistered<ChatController>()) {
         await Get.find<ChatController>().rebuildBackend();
@@ -374,58 +362,6 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
     selectedModel = id;
     lastPlan = null;
     notifyListeners();
-  }
-
-  Future<void> refreshLive() async {
-    final client = _client;
-    if (client == null || _disposed || _liveRefreshing) return;
-    _liveRefreshing = true;
-    final epoch = _epoch;
-    try {
-      if (Get.isRegistered<ChatController>()) {
-        final library = Get.find<ChatController>().shared;
-        library.attach(client);
-        unawaited(library.refresh());
-      }
-      final values = await Future.wait<Object>(
-          [client.document('/performance'), client.ping()]);
-      if (_disposed || epoch != _epoch) return;
-      performance = values[0] as Map<String, dynamic>;
-      latencyMs = values[1] as double;
-      performanceError = null;
-    } catch (failure) {
-      if (!_disposed && epoch == _epoch) performanceError = cleanError(failure);
-    } finally {
-      _liveRefreshing = false;
-      if (!_disposed && epoch == _epoch) notifyListeners();
-    }
-  }
-
-  Future<void> startBenchmark() async {
-    if (_client == null || operationBusy || benchmarking) return;
-    operationBusy = true;
-    performanceError = null;
-    notifyListeners();
-    try {
-      await _client!.document('/benchmarks/start',
-          body: {'model': selectedModel ?? runningModel, 'ctx': contextTokens});
-      await refreshLive();
-    } catch (failure) {
-      performanceError = cleanError(failure);
-    } finally {
-      operationBusy = false;
-      if (!_disposed) notifyListeners();
-    }
-  }
-
-  Future<void> cancelBenchmark() async {
-    try {
-      await _client?.document('/benchmarks/cancel', body: {});
-      await refreshLive();
-    } catch (failure) {
-      performanceError = cleanError(failure);
-      if (!_disposed) notifyListeners();
-    }
   }
 
   void selectContext(int value) {
@@ -740,7 +676,6 @@ class ConnectionController extends ChangeNotifier with WidgetsBindingObserver {
     _disposed = true;
     _epoch++;
     _timer?.cancel();
-    _liveTimer?.cancel();
     _workerWatch?.dispose();
     _client?.dispose();
     WidgetsBinding.instance.removeObserver(this);

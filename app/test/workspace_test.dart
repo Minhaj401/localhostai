@@ -8,13 +8,11 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:localhostai/controllers/chat_controller.dart';
 import 'package:localhostai/features/chat/conversations_page.dart';
-import 'package:localhostai/features/server/performance_panel.dart';
 import 'package:localhostai/models/pairing.dart';
 import 'package:localhostai/services/conversation_library.dart';
 import 'package:localhostai/services/laptop_node_service.dart';
 import 'package:localhostai/services/node_client.dart';
 import 'package:localhostai/theme/theme.dart';
-import 'app_fixture.dart';
 import 'support.dart';
 
 class WorkspaceServer {
@@ -224,7 +222,7 @@ void main() {
     Size(1280, 800)
   ]) {
     testWidgets(
-        'conversation library and measured dashboard at $size with scaled text',
+        'conversation library at $size with scaled text',
         (tester) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
@@ -253,49 +251,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
       expect(chat.shared.conversations, hasLength(1));
-      final fixture = AppFixture();
-      final node = await tester.runAsync(fixture.createController);
-      node!.performance = {
-        'generations': [
-          {
-            'tokens_per_second': 12.5,
-            'ttft_ms': 55.0,
-            'output_tokens': 42,
-            'token_source': 'runtime timings'
-          }
-        ],
-        'devices': [
-          {
-            'name': 'Laptop',
-            'self': true,
-            'rss_mb': 320,
-            'planned_mb': 750,
-            'assigned_layers': 12,
-            'sample_age_seconds': 0,
-            'source': 'engine process RSS'
-          },
-          {
-            'name': 'Phone with no readable RSS',
-            'self': false,
-            'rss_mb': null,
-            'planned_mb': 640,
-            'assigned_layers': 12,
-            'sample_age_seconds': 3,
-            'source': 'phone-reported worker RSS'
-          }
-        ]
-      };
-      node.latencyMs = 7.2;
-      await tester.pumpWidget(host(Scaffold(
-          body: SingleChildScrollView(child: PerformancePanel(node: node)))));
-      await tester.pumpAndSettle();
-      expect(find.text('12.5 tok/s'), findsOneWidget);
-      expect(find.text('320.0 MiB'), findsOneWidget);
-      expect(find.text('750.0 MiB'), findsOneWidget);
-      expect(find.text('Not reported'), findsWidgets);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox.shrink());
-      node.dispose();
     });
   }
 }
